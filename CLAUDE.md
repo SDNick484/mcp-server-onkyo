@@ -19,7 +19,9 @@ changes over clever ones. Show the JSON-RPC traffic when it helps.
 - Safety limits (e.g. max volume) are enforced server-side, never trusted to the model.
 
 ## Testing
-- Unit (not written yet): `pytest` against `fake_receiver.py`.
+- Unit: `pytest` (in `tests/`). Each test gets its own `fake_receiver` on a free port.
+  Async tests use anyio's plugin (`pytest.mark.anyio`), not pytest-asyncio: the
+  MCP `Client` fixture needs setup and teardown in the same task.
 - Protocol: `npx @modelcontextprotocol/inspector mcp-server-onkyo`
 - Real hardware: `ONKYO_HOST=<ip> mcp-server-onkyo`
 - Keep README.md's tool table, config table and roadmap in sync with the code.

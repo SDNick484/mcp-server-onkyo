@@ -7,6 +7,8 @@ Simulated Onkyo receiver for developing without hardware.
 It speaks enough eISCP to exercise the server: it remembers PWR/MVL/AMT/SLI
 state, answers QSTN queries, and sends an unsolicited status message before
 every reply, the way real receivers do, so the server's filtering gets tested.
+
+Tests import it and call `start(port=0)` to get a receiver on a free port.
 """
 
 import asyncio
@@ -14,7 +16,13 @@ import struct
 import sys
 
 # MVL 0x50 = 80 raw -> displays 40.0 on a 0.5-step model (TX-NR6050/7100)
-state = {"PWR": "00", "MVL": "50", "AMT": "00", "SLI": "10"}
+DEFAULT_STATE = {"PWR": "00", "MVL": "50", "AMT": "00", "SLI": "10"}
+state = dict(DEFAULT_STATE)
+
+
+def reset_state() -> None:
+    state.clear()
+    state.update(DEFAULT_STATE)
 
 
 def packet(msg: str) -> bytes:
@@ -59,12 +67,20 @@ class Discovery(asyncio.DatagramProtocol):
             self.transport.sendto(packet("ECNTX-NR7100/60128/DX/0009B0623D93"), addr)
 
 
-async def main() -> None:
-    server = await asyncio.start_server(handle, "127.0.0.1", 60128)
-    await asyncio.get_running_loop().create_datagram_endpoint(
-        Discovery, local_addr=("127.0.0.1", 60128)
+async def start(host: str = "127.0.0.1", port: int = 60128):
+    """Start TCP control and UDP discovery on the same port number, like a real
+    receiver. Pass port=0 to pick a free one. Returns (tcp_server, udp_transport, port)."""
+    server = await asyncio.start_server(handle, host, port)
+    port = server.sockets[0].getsockname()[1]
+    udp, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+        Discovery, local_addr=(host, port)
     )
-    print("Fake receiver on 127.0.0.1:60128 (TCP control + UDP discovery)", file=sys.stderr)
+    return server, udp, port
+
+
+async def main() -> None:
+    server, _udp, port = await start()
+    print(f"Fake receiver on 127.0.0.1:{port} (TCP control + UDP discovery)", file=sys.stderr)
     async with server:
         await server.serve_forever()
 

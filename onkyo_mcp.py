@@ -194,6 +194,8 @@ async def set_volume(level: float) -> str:
     newer models). Values above the configured safety cap are clamped."""
     clamped = max(0.0, min(level, MAX_VOLUME))
     reply = await send(f"MVL{volume_to_raw(clamped)}", expect="MVL")
+    if reply == "N/A":
+        return "Receiver rejected the volume change (is it powered on?)"
     note = f" (requested {level}, capped at {MAX_VOLUME})" if clamped != level else ""
     return f"Volume is now {raw_to_volume(reply)}{note}"
 

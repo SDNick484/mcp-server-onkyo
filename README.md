@@ -102,6 +102,14 @@ ONKYO_DISCOVERY_ADDR=127.0.0.1 mcp-server-onkyo --discover
 ONKYO_HOST=127.0.0.1 npx @modelcontextprotocol/inspector mcp-server-onkyo
 ```
 
+Run the tests (no receiver needed; each test gets its own fake receiver on a
+free port):
+
+```sh
+pip install -e '.[dev]'
+pytest
+```
+
 The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) lets you
 browse `tools/list`, call tools by hand and watch the JSON-RPC traffic.
 
@@ -141,7 +149,7 @@ browse `tools/list`, call tools by hand and watch the JSON-RPC traffic.
 - [ ] Receiver state as MCP resources
 - [ ] Persistent connection with push updates
 - [ ] Streamable HTTP transport for running on a home server
-- [ ] Tests
+- [x] Tests
 
 ## Acknowledgements
 
