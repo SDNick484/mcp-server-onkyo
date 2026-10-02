@@ -17,6 +17,7 @@ Inspect interactively (shows tools/list, lets you call tools by hand):
 import asyncio
 import os
 import struct
+from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
 
@@ -35,6 +36,19 @@ def raw_to_volume(raw: str) -> float:
 
 def volume_to_raw(volume: float) -> str:
     return f"{round(volume * VOLUME_STEPS):02X}"
+
+
+# Input selector (SLI) codes, named after the TX-NR7100/6050 front-panel labels.
+# The Literal type becomes a JSON Schema "enum", so the model can only pick
+# one of these names. Keep the two in sync.
+Source = Literal["bd-dvd", "game", "cbl-sat", "strm-box", "pc", "aux", "tv",
+                 "phono", "cd", "fm", "am", "net", "bluetooth"]
+SOURCE_CODES: dict[str, str] = {
+    "bd-dvd": "10", "game": "02", "cbl-sat": "01", "strm-box": "11", "pc": "05",
+    "aux": "03", "tv": "12", "phono": "22", "cd": "23", "fm": "24", "am": "25",
+    "net": "2B", "bluetooth": "2E",
+}
+CODE_SOURCES = {code: name for name, code in SOURCE_CODES.items()}
 
 
 mcp = MCPServer("onkyo")
@@ -152,14 +166,18 @@ async def discover_receivers() -> list[dict]:
 
 @mcp.tool()
 async def get_status() -> dict:
-    """Get the receiver's current power state, master volume (0-100) and mute state."""
+    """Get the receiver's current power state, master volume (0-100), mute
+    state and selected input."""
     power = await send("PWRQSTN", expect="PWR")
     volume = await send("MVLQSTN", expect="MVL")
     mute = await send("AMTQSTN", expect="AMT")
+    source = await send("SLIQSTN", expect="SLI")
     return {
         "power": "on" if power == "01" else "standby",
         "volume": raw_to_volume(volume) if volume and volume != "N/A" else None,
         "muted": mute == "01",
+        # Unknown codes (inputs not in SOURCE_CODES) are shown raw, e.g. "SLI2C"
+        "input": CODE_SOURCES.get(source, f"SLI{source}") if source and source != "N/A" else None,
     }
 
 
@@ -185,6 +203,17 @@ async def set_mute(muted: bool) -> str:
     """Mute or unmute the main zone."""
     reply = await send("AMT01" if muted else "AMT00", expect="AMT")
     return "Muted" if reply == "01" else "Unmuted"
+
+
+@mcp.tool()
+async def set_input(source: Source) -> str:
+    """Select the main zone's input source. Names match the receiver's
+    front-panel labels (e.g. "bd-dvd" for the BD/DVD input, "net" for
+    network streaming). The receiver must be on."""
+    reply = await send(f"SLI{SOURCE_CODES[source]}", expect="SLI")
+    if reply == "N/A":
+        return f"Receiver rejected input {source!r} (is it powered on?)"
+    return f"Input is now {CODE_SOURCES.get(reply, f'SLI{reply}')}"
 
 
 def main() -> None:

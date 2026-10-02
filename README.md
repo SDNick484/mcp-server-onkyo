@@ -18,10 +18,11 @@ port 60128) directly and needs nothing but the official MCP Python SDK.
 | Tool | What it does |
 | --- | --- |
 | `discover_receivers` | Broadcasts an eISCP discovery query and returns each receiver's IP, model, port and MAC |
-| `get_status` | Power state, master volume (0–100 display scale) and mute state |
+| `get_status` | Power state, master volume (0–100 display scale), mute state and selected input |
 | `set_power` | Turn the main zone on, or put it into standby |
 | `set_volume` | Set master volume (0.5 steps on newer models); clamped to a configurable safety cap |
 | `set_mute` | Mute or unmute the main zone |
+| `set_input` | Select the main zone input (`bd-dvd`, `game`, `cbl-sat`, `strm-box`, `pc`, `aux`, `tv`, `phono`, `cd`, `fm`, `am`, `net`, `bluetooth`) |
 
 ## Requirements
 
@@ -133,7 +134,8 @@ browse `tools/list`, call tools by hand and watch the JSON-RPC traffic.
 
 - [ ] Validate on TX-NR7100 / TX-NR6050 hardware
 - [ ] Multiple receivers from one server (a `receiver` argument on each tool)
-- [ ] Input selection and listening modes
+- [x] Input selection
+- [ ] Listening modes
 - [ ] Zone 2 / Zone 3
 - [ ] Typed (structured) tool output
 - [ ] Receiver state as MCP resources
