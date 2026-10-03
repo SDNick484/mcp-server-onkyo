@@ -5,8 +5,8 @@ from typing import get_args
 import pytest
 
 import onkyo_mcp
-from onkyo_mcp import (CODE_SOURCES, SOURCE_CODES, Source, build_packet, decode_datagram,
-                       raw_to_volume, volume_to_raw)
+from onkyo_mcp import (CODE_MODES, CODE_SOURCES, MODE_CODES, SOURCE_CODES, ListeningMode, Source,
+                       build_packet, decode_datagram, raw_to_volume, volume_to_raw)
 
 
 def test_build_packet_layout():
@@ -58,3 +58,11 @@ def test_source_literal_matches_code_table():
 
 def test_source_codes_are_unique():
     assert len(CODE_SOURCES) == len(SOURCE_CODES)
+
+
+def test_listening_mode_literal_matches_code_table():
+    assert set(get_args(ListeningMode)) == set(MODE_CODES)
+
+
+def test_listening_mode_codes_are_unique():
+    assert len(CODE_MODES) == len(MODE_CODES)

@@ -18,11 +18,16 @@ port 60128) directly and needs nothing but the official MCP Python SDK.
 | Tool | What it does |
 | --- | --- |
 | `discover_receivers` | Broadcasts an eISCP discovery query and returns each receiver's IP, model, port and MAC |
-| `get_status` | Power state, master volume (0–100 display scale), mute state and selected input |
+| `get_status` | Power state, master volume (0–100 display scale), mute state, selected input and listening mode |
 | `set_power` | Turn the main zone on, or put it into standby |
 | `set_volume` | Set master volume (0.5 steps on newer models); clamped to a configurable safety cap |
 | `set_mute` | Mute or unmute the main zone |
 | `set_input` | Select the main zone input (`bd-dvd`, `game`, `cbl-sat`, `strm-box`, `pc`, `aux`, `tv`, `phono`, `cd`, `fm`, `am`, `net`, `bluetooth`) |
+| `set_listening_mode` | Set the listening mode (`stereo`, `direct`, `pure-audio`, `all-ch-stereo`, `full-mono`, `theater-dimensional`, `dolby-surround`, `dts-neural-x`, `game-rpg`, `game-action`, `game-rock`, `game-sports`) |
+
+Every tool except `discover_receivers` takes an optional `receiver` argument
+(an IP address from `discover_receivers`) for networks with several receivers.
+Without it, tools talk to `ONKYO_HOST`.
 
 ## Requirements
 
@@ -61,7 +66,7 @@ All settings are environment variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ONKYO_HOST` | `192.168.1.50` | Receiver IP address |
+| `ONKYO_HOST` | `192.168.1.50` | Default receiver IP address (tools that take a `receiver` argument can target others) |
 | `ONKYO_PORT` | `60128` | eISCP port |
 | `ONKYO_MAX_VOLUME` | `50` | Safety cap on the display scale. Enforced by the server, not left to the model |
 | `ONKYO_VOLUME_STEPS` | `2` | Raw volume steps per display unit: `2` for newer models with 0.5 steps (TX-NR6050, TX-NR7100), `1` for older ones |
@@ -141,9 +146,9 @@ browse `tools/list`, call tools by hand and watch the JSON-RPC traffic.
 ## Roadmap
 
 - [ ] Validate on TX-NR7100 / TX-NR6050 hardware
-- [ ] Multiple receivers from one server (a `receiver` argument on each tool)
+- [x] Multiple receivers from one server (a `receiver` argument on each tool)
 - [x] Input selection
-- [ ] Listening modes
+- [x] Listening modes
 - [ ] Zone 2 / Zone 3
 - [ ] Typed (structured) tool output
 - [ ] Receiver state as MCP resources

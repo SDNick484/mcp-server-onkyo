@@ -21,7 +21,7 @@ async def test_send_without_expect_returns_none(receiver):
 
 
 async def test_unknown_command_returns_na(receiver):
-    assert await send("LMDQSTN", expect="LMD") == "N/A"
+    assert await send("TUNQSTN", expect="TUN") == "N/A"
 
 
 async def test_discover_parses_ecn_reply(receiver):

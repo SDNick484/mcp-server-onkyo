@@ -17,9 +17,10 @@ Inspect interactively (shows tools/list, lets you call tools by hand):
 import asyncio
 import os
 import struct
-from typing import Literal
+from typing import Annotated, Literal
 
 from mcp.server.mcpserver import MCPServer
+from pydantic import Field
 
 HOST = os.environ.get("ONKYO_HOST", "192.168.1.50")
 PORT = int(os.environ.get("ONKYO_PORT", "60128"))
@@ -49,6 +50,20 @@ SOURCE_CODES: dict[str, str] = {
     "net": "2B", "bluetooth": "2E",
 }
 CODE_SOURCES = {code: name for name, code in SOURCE_CODES.items()}
+
+# Listening mode (LMD) codes. Several codes have older and newer meanings in
+# onkyo-eiscp's table (80 = PLII Movie / Dolby Surround, 82 = Neo:6 Cinema /
+# DTS Neural:X, 03 = Film / Game-RPG); these names are the 2021-model ones.
+ListeningMode = Literal["stereo", "direct", "pure-audio", "all-ch-stereo", "full-mono",
+                        "theater-dimensional", "dolby-surround", "dts-neural-x",
+                        "game-rpg", "game-action", "game-rock", "game-sports"]
+MODE_CODES: dict[str, str] = {
+    "stereo": "00", "direct": "01", "pure-audio": "11", "all-ch-stereo": "0C",
+    "full-mono": "13", "theater-dimensional": "0D", "dolby-surround": "80",
+    "dts-neural-x": "82", "game-rpg": "03", "game-action": "05", "game-rock": "06",
+    "game-sports": "0E",
+}
+CODE_MODES = {code: name for name, code in MODE_CODES.items()}
 
 
 mcp = MCPServer("onkyo")
@@ -125,12 +140,13 @@ async def read_packet(reader: asyncio.StreamReader) -> str:
     return data.decode("ascii", "replace")[2:].rstrip("\x1a\r\n")
 
 
-async def send(command: str, expect: str | None = None, timeout: float = 2.0) -> str | None:
-    """Send one command. If `expect` is a 3-char prefix (e.g. "MVL"), wait for
-    the matching reply. The receiver also pushes unsolicited status messages,
-    so we skip anything that doesn't match."""
+async def send(command: str, expect: str | None = None, timeout: float = 2.0,
+               host: str | None = None) -> str | None:
+    """Send one command to `host` (default: ONKYO_HOST). If `expect` is a
+    3-char prefix (e.g. "MVL"), wait for the matching reply. The receiver also
+    pushes unsolicited status messages, so we skip anything that doesn't match."""
     reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(HOST, PORT), timeout
+        asyncio.open_connection(host or HOST, PORT), timeout
     )
     try:
         writer.write(build_packet(command))
@@ -164,36 +180,49 @@ async def discover_receivers() -> list[dict]:
     return await discover()
 
 
+# Optional, so single-receiver setups (ONKYO_HOST) keep working unchanged.
+# The Field description lands in the tool's JSON Schema next to the type.
+Receiver = Annotated[str | None, Field(
+    description="IP address of the receiver, as returned by discover_receivers. "
+                "Omit to use the default receiver."
+)]
+
+
 @mcp.tool()
-async def get_status() -> dict:
-    """Get the receiver's current power state, master volume (0-100), mute
-    state and selected input."""
-    power = await send("PWRQSTN", expect="PWR")
-    volume = await send("MVLQSTN", expect="MVL")
-    mute = await send("AMTQSTN", expect="AMT")
-    source = await send("SLIQSTN", expect="SLI")
+async def get_status(receiver: Receiver = None) -> dict:
+    """Get a receiver's current power state, master volume (0-100), mute
+    state, selected input and listening mode. If there are several receivers
+    on the network, call discover_receivers first and pass the one you want."""
+    host = receiver or HOST
+    power = await send("PWRQSTN", expect="PWR", host=host)
+    volume = await send("MVLQSTN", expect="MVL", host=host)
+    mute = await send("AMTQSTN", expect="AMT", host=host)
+    source = await send("SLIQSTN", expect="SLI", host=host)
+    mode = await send("LMDQSTN", expect="LMD", host=host)
     return {
+        "receiver": host,  # so the model can tell answers from different receivers apart
         "power": "on" if power == "01" else "standby",
         "volume": raw_to_volume(volume) if volume and volume != "N/A" else None,
         "muted": mute == "01",
-        # Unknown codes (inputs not in SOURCE_CODES) are shown raw, e.g. "SLI2C"
+        # Unknown codes (not in our tables) are shown raw, e.g. "SLI2C"
         "input": CODE_SOURCES.get(source, f"SLI{source}") if source and source != "N/A" else None,
+        "listening_mode": CODE_MODES.get(mode, f"LMD{mode}") if mode and mode != "N/A" else None,
     }
 
 
 @mcp.tool()
-async def set_power(on: bool) -> str:
+async def set_power(on: bool, receiver: Receiver = None) -> str:
     """Turn the main zone on, or put it into standby."""
-    reply = await send("PWR01" if on else "PWR00", expect="PWR")
+    reply = await send("PWR01" if on else "PWR00", expect="PWR", host=receiver)
     return f"Power is now {'on' if reply == '01' else 'standby'}"
 
 
 @mcp.tool()
-async def set_volume(level: float) -> str:
+async def set_volume(level: float, receiver: Receiver = None) -> str:
     """Set master volume on the receiver's 0-100 display scale (0.5 steps on
     newer models). Values above the configured safety cap are clamped."""
     clamped = max(0.0, min(level, MAX_VOLUME))
-    reply = await send(f"MVL{volume_to_raw(clamped)}", expect="MVL")
+    reply = await send(f"MVL{volume_to_raw(clamped)}", expect="MVL", host=receiver)
     if reply == "N/A":
         return "Receiver rejected the volume change (is it powered on?)"
     note = f" (requested {level}, capped at {MAX_VOLUME})" if clamped != level else ""
@@ -201,21 +230,34 @@ async def set_volume(level: float) -> str:
 
 
 @mcp.tool()
-async def set_mute(muted: bool) -> str:
+async def set_mute(muted: bool, receiver: Receiver = None) -> str:
     """Mute or unmute the main zone."""
-    reply = await send("AMT01" if muted else "AMT00", expect="AMT")
+    reply = await send("AMT01" if muted else "AMT00", expect="AMT", host=receiver)
     return "Muted" if reply == "01" else "Unmuted"
 
 
 @mcp.tool()
-async def set_input(source: Source) -> str:
+async def set_input(source: Source, receiver: Receiver = None) -> str:
     """Select the main zone's input source. Names match the receiver's
     front-panel labels (e.g. "bd-dvd" for the BD/DVD input, "net" for
     network streaming). The receiver must be on."""
-    reply = await send(f"SLI{SOURCE_CODES[source]}", expect="SLI")
+    reply = await send(f"SLI{SOURCE_CODES[source]}", expect="SLI", host=receiver)
     if reply == "N/A":
         return f"Receiver rejected input {source!r} (is it powered on?)"
     return f"Input is now {CODE_SOURCES.get(reply, f'SLI{reply}')}"
+
+
+@mcp.tool()
+async def set_listening_mode(mode: ListeningMode, receiver: Receiver = None) -> str:
+    """Set the main zone's listening mode (surround processing). "direct" and
+    "pure-audio" play the source unprocessed; "dolby-surround" and
+    "dts-neural-x" upmix to all speakers and play Dolby Atmos / DTS:X content
+    natively. The receiver must be on, and may reject modes that don't suit
+    the current input signal."""
+    reply = await send(f"LMD{MODE_CODES[mode]}", expect="LMD", host=receiver)
+    if reply == "N/A":
+        return f"Receiver rejected listening mode {mode!r} (powered off, or not available for this signal?)"
+    return f"Listening mode is now {CODE_MODES.get(reply, f'LMD{reply}')}"
 
 
 def main() -> None:
