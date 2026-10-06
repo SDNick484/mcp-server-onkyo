@@ -24,7 +24,7 @@ port 60128) directly and needs nothing but the official MCP Python SDK.
 | `set_mute` | Mute or unmute a zone |
 | `set_input` | Select a zone's input (`bd-dvd`, `game`, `cbl-sat`, `strm-box`, `pc`, `aux`, `tv`, `phono`, `cd`, `fm`, `am`, `net`, `bluetooth`; zones 2/3 also `same-as-main`) |
 | `set_listening_mode` | Set the main zone's listening mode (`stereo`, `direct`, `pure-audio`, `all-ch-stereo`, `full-mono`, `theater-dimensional`, `dolby-surround`, `dts-neural-x`, `game-rpg`, `game-action`, `game-rock`, `game-sports`) |
-| `select_net_service` | Switch the network player to a streaming service (`pandora`, `spotify`, `deezer`, `tidal`, `amazon-music`, `airplay`, `tunein`) |
+| `select_net_service` | Switch the network player to a streaming service (`pandora`, `spotify`, `deezer`, `tidal`, `amazon-music`, `airplay`, `tunein`, `music-server`) |
 | `get_now_playing` | The network player's service, station, play state, title, artist, album and position |
 | `list_stations` | What a service's top menu can play, e.g. your Pandora stations |
 | `play_station` | Start a station by name (part of the name is enough) |
@@ -63,11 +63,18 @@ whose input is `net`. To play Pandora in Zone 2: `set_power` and
 `list_stations` (e.g. "Pearl Jam Radio"). Only music items can be played, so
 menu entries like "Sign Out" are never selected. Which
 services work depends on the model, region and firmware, and each must be
-signed in on the receiver (e.g. in the Onkyo Controller app). The list
-matches what the Onkyo Controller app offers for the TX-NR6050/7100, plus
-TuneIn, which the receivers list themselves; only
-Pandora has been verified so far. AirPlay and Spotify are normally started
-from a phone (AirPlay, Spotify Connect).
+signed in on the receiver (e.g. in the Onkyo Controller app); if one isn't,
+the tools say so and quote the receiver's sign-in screen. The list matches
+what the Onkyo Controller app offers for the TX-NR6050/7100, plus TuneIn and
+the music server (DLNA), which the receivers list themselves. All eight open
+correctly on a TX-NR6050:
+
+| Service | What happens |
+| --- | --- |
+| Pandora | Stations listed and played by name |
+| TuneIn, Music Server | Menu opens; their stations and music are inside folders, which can't be browsed yet |
+| TIDAL, Amazon Music, Deezer | Menu opens if signed in (and subscribed); otherwise a clear "isn't ready" message |
+| Spotify, AirPlay | Selected; playback is started from a phone or computer (Spotify Connect, AirPlay) |
 
 Each tool also declares MCP tool annotations. `discover_receivers`,
 `get_status` and `get_now_playing` are read-only. The `set_*`, `select_*`,
@@ -264,7 +271,7 @@ ONKYO_DISCOVERY_ADDR=192.168.1.50 mcp-server-onkyo --discover
 - [x] Zone 2 / Zone 3
 - [x] Network services: select a service, now playing
 - [x] Network playback: stations by name, play/pause/stop/next/previous
-- [ ] Browsing deeper menus (playlists, albums, TuneIn categories)
+- [ ] Browsing into folders: TuneIn presets, music server, playlists, albums
 - [ ] Discovery that works where broadcasts are filtered (query a configured
       list of IPs directly)
 - [ ] Typed (structured) tool output

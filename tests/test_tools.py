@@ -429,3 +429,18 @@ async def test_no_host_and_several_receivers_asks_which(client, receiver, monkey
     result = await client.call_tool("get_status", {})
     assert result.is_error
     assert "TX-NR6050 at 192.168.1.147, TX-NR7100 at 192.168.1.245" in text(result)
+
+
+
+async def test_signed_out_service_says_so(client, receiver):
+    result = await client.call_tool("select_net_service", {"service": "tidal"})
+    assert result.is_error
+    assert 'tidal isn\'t ready: the receiver shows "TIDAL Login"' in text(result)
+    result = await client.call_tool("play_station", {"station": "anything", "service": "tidal"})
+    assert result.is_error and "TIDAL Login" in text(result)
+
+
+async def test_folders_only_menu_says_so(client, receiver):
+    result = await client.call_tool("list_stations", {"service": "tunein"})
+    assert result.is_error
+    assert "folders, not stations: My Presets, Local Radio" in text(result)

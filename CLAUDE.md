@@ -56,5 +56,8 @@ Observed on real hardware (TX-NR7100 is the awkward one; the TX-NR6050 answers i
   music, `0` = the item playing now, `G`/`-` = "Create new station", "Account
   Info", "Sign Out" (never select). `NTC` PLAY/PAUSE/STOP confirm via NST P/p/S;
   TRUP has no state change, so watch NTI. `NDN` = station name.
+- A signed-out service opens a popup instead of its menu: `NLT<code>3...` (UI type 3),
+  title e.g. "TIDAL Login", "Amazon Music Sign In", "Try Deezer Premium+". TuneIn and
+  the music server's top menus are folders only (icontype `F`).
 - `NSV` (select network service) has no echo: the confirmation is a pushed
   `NLT<service code>...<name>`. Text fields (titles, stations) are UTF-8.

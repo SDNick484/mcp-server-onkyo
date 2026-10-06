@@ -109,22 +109,21 @@ MODE_CODES: dict[str, str] = {
 CODE_MODES = {code: name for name, code in MODE_CODES.items()}
 
 # Network services (NSV codes): the services the Onkyo Controller app offers
-# for a TX-NR6050/7100, plus TuneIn, which both list though the app doesn't
-# show it. Codes as the receivers list them in their own
-# description (NRIQSTN, <netservicelist>); onkyo-eiscp's tables have TIDAL as
-# 19, AirPlay as 18 and no Amazon Music. Most services must be signed in on
-# the receiver first. Verified on a TX-NR6050: pandora.
+# for a TX-NR6050/7100, plus TuneIn and the music server (DLNA), which both
+# receivers list though the app doesn't show them. Codes as the receivers
+# list them in their own description (NRIQSTN, <netservicelist>);
+# onkyo-eiscp's tables have TIDAL as 19, AirPlay as 18 and no Amazon Music.
+# All verified on a TX-NR6050. Most must be signed in on the receiver first.
 NetService = Literal["pandora", "spotify", "deezer", "tidal", "amazon-music", "airplay",
-                     "tunein"]
+                     "tunein", "music-server"]
 NET_SERVICE_CODES: dict[str, str] = {
     "pandora": "04", "spotify": "0A", "deezer": "12", "tidal": "1B",
-    "amazon-music": "1C", "airplay": "44", "tunein": "0E",
+    "amazon-music": "1C", "airplay": "44", "tunein": "0E", "music-server": "00",
 }
 CODE_NET_SERVICES = {code: name for name, code in NET_SERVICE_CODES.items()}
 # Other sources the network player can be playing (NMS service icons; AirPlay
 # shows as 18 there even though it is selected as 44)
-CODE_NET_SERVICES |= {"00": "music-server", "18": "airplay", "F0": "usb", "F1": "usb",
-                      "F4": "bluetooth"}
+CODE_NET_SERVICES |= {"18": "airplay", "F0": "usb", "F1": "usb", "F4": "bluetooth"}
 # NST play state: first character of the reply ("Pxx1" = playing)
 PLAY_STATES = {"P": "playing", "p": "paused", "S": "stopped", "F": "fast-forward",
                "R": "rewind", "E": "end"}
@@ -673,7 +672,17 @@ async def select_net_service(service: NetService, receiver: Receiver = None) -> 
         f"NSV{code}0", f"NLT{code}", receiver,  # "0": no account details included
         no_reply=f"The receiver didn't switch to {service}. It may not offer {service}, "
                  "or it isn't signed in: check in the Onkyo Controller app.")
+    if reply[0] in "34":  # the screen is a popup or keyboard, not the service's menu
+        raise ToolError(not_ready(service, reply[20:]))
     return f"Network service is now {reply[20:] or service}"
+
+
+def not_ready(service: str, screen: str) -> str:
+    # A signed-out service opens a popup instead of its menu: "TIDAL Login",
+    # "Amazon Music Sign In", "Try Deezer Premium+" (no account)
+    return (f"{service} isn't ready: the receiver shows \"{screen}\". It needs "
+            "signing in (or a subscription), which you can do in the Onkyo "
+            "Controller app.")
 
 
 @mcp.tool(title="Get now playing", annotations=READ_ONLY)
@@ -725,20 +734,34 @@ async def service_menu(service: NetService, host: str) -> list[tuple[int, str]]:
     code = NET_SERVICE_CODES[service]
     # "NLT<code>01": a list (0) at the service's top layer (1). The playback
     # screen pushes "NLT<code>22..." while music plays, which isn't the menu.
-    title = await call_receiver(
-        f"NSV{code}0", f"NLT{code}01", host,
-        no_reply=f"The receiver didn't open {service}. It may not offer {service}, "
-                 "or it isn't signed in: check in the Onkyo Controller app.")
+    try:
+        title = await call_receiver(
+            f"NSV{code}0", f"NLT{code}01", host,
+            no_reply=f"The receiver didn't open {service}. It may not offer {service}, "
+                     "or it isn't signed in: check in the Onkyo Controller app.")
+    except ToolError:
+        # Maybe it opened a popup instead ("NLT1B31...TIDAL Login")
+        shown = await call_receiver("NLTQSTN", "NLT", host)
+        if shown.startswith(code) and shown[2:3] in ("3", "4"):
+            raise ToolError(not_ready(service, shown[22:])) from None
+        raise
     count, layer = int(title[4:8], 16), title[8:10]
     # Expect "NLAX", not "NLA": send() would take "NLAL..." for a setter and
     # wait for it to be echoed back, which never happens.
     reply = await call_receiver(f"NLAL0001{layer}0000{min(count, 0xFFF):04X}", "NLAX", host)
     if reply[4:5] != "S":  # "0001S000<?xml..." = success
         raise ToolError(f"The receiver couldn't list {service}'s menu.")
-    items = ElementTree.fromstring(reply[8:]).iter("item")
-    return [(position, item.get("title", ""))
-            for position, item in enumerate(items, start=1)
-            if item.get("icontype") in ("M", "0")]  # music, or playing now
+    items = list(ElementTree.fromstring(reply[8:]).iter("item"))
+    playable = [(position, item.get("title", ""))
+                for position, item in enumerate(items, start=1)
+                if item.get("icontype") in ("M", "0")]  # music, or playing now
+    folders = [item.get("title", "") for item in items if item.get("icontype") == "F"]
+    if not playable and folders:
+        # TuneIn, the music server: stations are a level down
+        raise ToolError(f"{service}'s top menu has folders, not stations: "
+                        f"{', '.join(folders)}. Playing from inside folders isn't "
+                        "supported yet; use the Onkyo Controller app for now.")
+    return playable
 
 
 @mcp.tool(title="List stations", annotations=SETTER)

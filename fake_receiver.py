@@ -37,11 +37,15 @@ DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"
                         '</zonelist></device></response>'}
 # Services NSV can switch to (the rest get no reply, like a service the
 # receiver doesn't offer), and the menu title each one shows
-NET_SERVICES = {"04": "Pandora", "1C": "Amazon Music"}
+NET_SERVICES = {"04": "Pandora", "1C": "Amazon Music", "0E": "TuneIn Radio"}
+# A signed-out service opens a popup (UI type 3) instead of its menu
+SIGNED_OUT = {"1B": "TIDAL Login"}
 # Pandora's top menu, as (icontype, title): M = music, the rest must never be
 # played. "Pearl Jam Radio" appears twice, as it does on a real account.
 STATIONS = [("G", "Create new station"), ("M", "Shuffle"), ("M", "Pearl Jam Radio"),
             ("M", "Beyoncé Radio"), ("M", "Pearl Jam Radio"), ("-", "Sign Out")]
+# Other services' top menus: TuneIn has only folders (F)
+MENUS = {"04": STATIONS, "0E": [("F", "My Presets"), ("F", "Local Radio")], "1C": []}
 TRACKS = ["Black", "Interstate Love Song", "Garden"]  # what "next" steps through
 selected: list[int] = []  # NLSI positions received, for tests to check
 # Which power command each setting belongs to
@@ -75,8 +79,11 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
             writer.write(packet("NLSU0-Now Playing"))  # unsolicited noise
             if code == "NSV":
                 # No reply of its own: the receiver pushes its new menu title
+                if param[:2] in SIGNED_OUT:
+                    state["NLT"] = f"{param[:2]}31000000090100FF{param[:2]}00{SIGNED_OUT[param[:2]]}"
+                    writer.write(packet("NLT" + state["NLT"]))
                 if param[:2] in NET_SERVICES:
-                    count = len(STATIONS) if param[:2] == "04" else 0
+                    count = len(MENUS[param[:2]])
                     state["NLT"] = f"{param[:2]}010000{count:04X}0100FF0400{NET_SERVICES[param[:2]]}"
                     state["NMS"] = f"MxxxxS1{param[:2]}"  # ends with the service icon
                     writer.write(packet("NLT" + state["NLT"]))
@@ -85,9 +92,9 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                 # The station playing now is marked icontype "0", not "M"
                 items = "".join(f'<item icontype="{"0" if i in selected[-1:] else t}" '
                                 f'title="{title}" selectable="1" />'
-                                for i, (t, title) in enumerate(STATIONS, start=1))
+                                for i, (t, title) in enumerate(MENUS[state["NLT"][:2]], start=1))
                 xml = (f'<?xml version="1.0" encoding="utf-8"?><response status="ok">'
-                       f'<items offset="0" totalitems="{len(STATIONS)}" >{items}</items></response>')
+                       f'<items offset="0" totalitems="{items.count("<item")}" >{items}</items></response>')
                 writer.write(packet(f"NLAX{param[1:5]}S000{xml}"))
             elif code == "NLS" and param.startswith("I"):
                 position = int(param[1:])
