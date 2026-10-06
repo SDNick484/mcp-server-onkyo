@@ -39,9 +39,12 @@ Observed on real hardware (TX-NR7100 is the awkward one; the TX-NR6050 answers i
 - In standby it answers queries but silently ignores setters (no `N/A`).
 - After confirming `PWR01` it pushes a status burst and ignores setters for ~15s.
 - Discovery broadcasts don't reach either receiver on the owner's LAN; unicast does.
-- Zones 2/3 behave unlike the main zone: in standby they accept input changes and
-  answer `N/A` (not silence) to volume/mute. 7100 Zone 2 volume is `N/A` even when on
-  (probably fixed-level output); 7100 Zone 3 answers queries but ignores power-on.
-  The 6050 has no Zone 3 (silence, or `N/A` for SL3).
+- The owner's TX-NR7100 runs 5.2.4 using the Zone 2 outputs for height channels,
+  so it has only the main zone: its zone commands answer queries but don't work
+  (Zone 2 volume `N/A` even when "on", Zone 3 ignores power-on). The TX-NR6050 has
+  Zone 2 but no Zone 3 (silence, or `N/A` for SL3). Zones in standby accept input
+  changes and answer `N/A` (not silence) to volume/mute.
+- Network services in the owner's Onkyo app: Pandora, Spotify, Deezer, AirPlay,
+  TIDAL, Amazon Music. NSV codes from onkyo-eiscp issue #140 (TIDAL 1B, Amazon 1C).
 - `NSV` (select network service) has no echo: the confirmation is a pushed
   `NLT<service code>...<name>`. Text fields (titles, stations) are UTF-8.

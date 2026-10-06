@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 HOST = os.environ.get("ONKYO_HOST", "192.168.1.50")
 PORT = int(os.environ.get("ONKYO_PORT", "60128"))
 # Volume as shown on the receiver's display (0-100). Server-side guardrail.
-MAX_VOLUME = float(os.environ.get("ONKYO_MAX_VOLUME", "50"))
+MAX_VOLUME = float(os.environ.get("ONKYO_MAX_VOLUME", "75"))
 # Raw MVL steps per display unit. 2021+ models (TX-NR6050, TX-NR7100) use
 # 0.5 steps, so raw 0x00-0xC8 maps to 0.0-100.0 -> 2. Older models: 1.
 VOLUME_STEPS = int(os.environ.get("ONKYO_VOLUME_STEPS", "2"))
@@ -98,14 +98,15 @@ MODE_CODES: dict[str, str] = {
 }
 CODE_MODES = {code: name for name, code in MODE_CODES.items()}
 
-# Network services (NSV codes, from onkyo-eiscp's table). What a receiver
+# Network services (NSV codes): the services the Onkyo Controller app offers
+# for a TX-NR6050/7100. Codes are from the newer list in onkyo-eiscp issue
+# #140 (its main table has TIDAL as 19 and no Amazon Music). What a receiver
 # offers depends on model, region and firmware, and most services must be
 # signed in on the receiver first. Verified on a TX-NR6050: pandora.
-NetService = Literal["pandora", "tunein", "spotify", "deezer", "tidal",
-                     "iheartradio", "siriusxm", "music-server"]
+NetService = Literal["pandora", "spotify", "deezer", "tidal", "amazon-music", "airplay"]
 NET_SERVICE_CODES: dict[str, str] = {
-    "music-server": "00", "siriusxm": "03", "pandora": "04", "spotify": "0A",
-    "tunein": "0E", "deezer": "12", "iheartradio": "13", "tidal": "19",
+    "pandora": "04", "spotify": "0A", "deezer": "12", "tidal": "1B",
+    "amazon-music": "1C", "airplay": "18",
 }
 CODE_NET_SERVICES = {code: name for name, code in NET_SERVICE_CODES.items()}
 # NST play state: first character of the reply ("Pxx1" = playing)
@@ -531,7 +532,9 @@ async def select_net_service(service: NetService, receiver: Receiver = None) -> 
     Pandora. There is one network player per receiver, shared by every zone
     whose input is "net": set a zone's input to "net" (set_input) to hear it.
     The service must be offered by this receiver and signed in (usually in the
-    Onkyo Controller app). Call get_now_playing afterwards to see what plays."""
+    Onkyo Controller app). "airplay" and "spotify" are normally started from a
+    phone (AirPlay, Spotify Connect); selecting them here may only make the
+    receiver wait for one. Call get_now_playing afterwards to see what plays."""
     code = NET_SERVICE_CODES[service]
     # NSV gets no reply of its own. The receiver confirms by pushing the title
     # of its new menu: "NLT" + the service code + 20 status characters + the

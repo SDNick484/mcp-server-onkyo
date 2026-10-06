@@ -24,7 +24,7 @@ port 60128) directly and needs nothing but the official MCP Python SDK.
 | `set_mute` | Mute or unmute a zone |
 | `set_input` | Select a zone's input (`bd-dvd`, `game`, `cbl-sat`, `strm-box`, `pc`, `aux`, `tv`, `phono`, `cd`, `fm`, `am`, `net`, `bluetooth`; zones 2/3 also `same-as-main`) |
 | `set_listening_mode` | Set the main zone's listening mode (`stereo`, `direct`, `pure-audio`, `all-ch-stereo`, `full-mono`, `theater-dimensional`, `dolby-surround`, `dts-neural-x`, `game-rpg`, `game-action`, `game-rock`, `game-sports`) |
-| `select_net_service` | Switch the network player to a streaming service (`pandora`, `tunein`, `spotify`, `deezer`, `tidal`, `iheartradio`, `siriusxm`, `music-server`) |
+| `select_net_service` | Switch the network player to a streaming service (`pandora`, `spotify`, `deezer`, `tidal`, `amazon-music`, `airplay`) |
 | `get_now_playing` | The network player's service, play state, title, artist, album and position |
 
 Every tool except `discover_receivers` takes an optional `receiver` argument
@@ -41,8 +41,10 @@ zone that feeds another amplifier may have fixed volume.
 whose input is `net`. To play Pandora in Zone 2: `set_power` and
 `set_input net` with `zone2`, then `select_net_service pandora`. Which
 services work depends on the model, region and firmware, and each must be
-signed in on the receiver (e.g. in the Onkyo Controller app). Only Pandora
-has been verified so far.
+signed in on the receiver (e.g. in the Onkyo Controller app). The list
+matches what the Onkyo Controller app offers for the TX-NR6050/7100; only
+Pandora has been verified so far. AirPlay and Spotify are normally started
+from a phone (AirPlay, Spotify Connect).
 
 Each tool also declares MCP tool annotations. `discover_receivers`,
 `get_status` and `get_now_playing` are read-only. The `set_*` and `select_*`
@@ -92,7 +94,7 @@ All settings are environment variables:
 | --- | --- | --- |
 | `ONKYO_HOST` | `192.168.1.50` | Default receiver IP address (tools that take a `receiver` argument can target others) |
 | `ONKYO_PORT` | `60128` | eISCP port |
-| `ONKYO_MAX_VOLUME` | `50` | Safety cap on the display scale. Enforced by the server, not left to the model |
+| `ONKYO_MAX_VOLUME` | `75` | Safety cap on the display scale. Enforced by the server, not left to the model |
 | `ONKYO_VOLUME_STEPS` | `2` | Raw volume steps per display unit: `2` for newer models with 0.5 steps (TX-NR6050, TX-NR7100), `1` for older ones |
 | `ONKYO_TIMEOUT` | `5` | Seconds to wait for a receiver to reply (power commands get 3×). Some models are slow: a TX-NR7100 takes ~1.5 s to answer a query and ~10 s to confirm standby |
 | `ONKYO_DISCOVERY_ADDR` | `255.255.255.255` | Where the discovery query is sent |

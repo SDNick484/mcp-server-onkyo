@@ -129,8 +129,8 @@ async def test_set_volume(client, receiver):
 
 async def test_set_volume_capped(client, receiver):
     result = await client.call_tool("set_volume", {"level": 90})
-    assert text(result) == "Volume is now 50.0 (requested 90.0, capped at 50.0)"
-    assert receiver["MVL"] == "64"  # raw 0x64 = 50.0, never above the cap
+    assert text(result) == "Volume is now 75.0 (requested 90.0, capped at 75.0)"
+    assert receiver["MVL"] == "96"  # raw 0x96 = 75.0, never above the cap
 
 
 async def test_set_volume_rejected_by_receiver(client, receiver):
@@ -240,9 +240,9 @@ async def test_zone2_on_net_at_capped_volume(client, receiver):
     assert text(await client.call_tool("set_input", {"source": "net", "zone": "zone2"})) == \
         "Zone 2: Input is now net"
     result = await client.call_tool("set_volume", {"level": 90, "zone": "zone2"})
-    assert text(result) == "Zone 2: Volume is now 50.0 (requested 90.0, capped at 50.0)"
+    assert text(result) == "Zone 2: Volume is now 75.0 (requested 90.0, capped at 75.0)"
     assert text(await client.call_tool("set_mute", {"muted": True, "zone": "zone2"})) == "Zone 2: Muted"
-    assert (receiver["ZPW"], receiver["SLZ"], receiver["ZVL"], receiver["ZMT"]) == ("01", "2B", "64", "01")
+    assert (receiver["ZPW"], receiver["SLZ"], receiver["ZVL"], receiver["ZMT"]) == ("01", "2B", "96", "01")
     # The main zone is untouched
     assert (receiver["SLI"], receiver["MVL"], receiver["AMT"]) == ("10", "50", "00")
 

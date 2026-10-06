@@ -7,7 +7,7 @@ Simulated Onkyo receiver for developing without hardware.
 It speaks enough eISCP to exercise the server: it remembers PWR/MVL/AMT/SLI/LMD
 state for the main zone and ZPW/ZVL/ZMT/SLZ for zone 2 (it has no zone 3, like
 a TX-NR6050) and a network player (NST/NTI/NAT/NAL/NTM/NLT, and NSV to pick
-Pandora or TuneIn), answers QSTN queries, and sends an unsolicited status message before
+Pandora or Amazon Music), answers QSTN queries, and sends an unsolicited status message before
 every reply, the way real receivers do, so the server's filtering gets tested.
 A zone in standby answers queries but ignores every other command for that
 zone except power, with no reply at all, like a real TX-NR7100.
@@ -29,7 +29,7 @@ DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"
                  "NAL": "", "NTM": "--:--:--/--:--:--"}
 # Services NSV can switch to (the rest get no reply, like a service the
 # receiver doesn't offer), and the menu title each one shows
-NET_SERVICES = {"04": "Pandora", "0E": "TuneIn"}
+NET_SERVICES = {"04": "Pandora", "1C": "Amazon Music"}
 # Which power command each setting belongs to
 ZONE_POWER = {"MVL": "PWR", "AMT": "PWR", "SLI": "PWR", "LMD": "PWR",
               "ZVL": "ZPW", "ZMT": "ZPW", "SLZ": "ZPW"}
