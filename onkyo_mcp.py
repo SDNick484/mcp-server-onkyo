@@ -20,6 +20,7 @@ import struct
 from typing import Annotated, Literal
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 HOST = os.environ.get("ONKYO_HOST", "192.168.1.50")
@@ -32,10 +33,13 @@ VOLUME_STEPS = int(os.environ.get("ONKYO_VOLUME_STEPS", "2"))
 
 
 def raw_to_volume(raw: str) -> float:
+    # "50" (hex) -> 80 raw steps -> 40.0 on the display, with VOLUME_STEPS=2
     return int(raw, 16) / VOLUME_STEPS
 
 
 def volume_to_raw(volume: float) -> str:
+    # 40.0 -> 80 raw steps -> "50". round() snaps e.g. 40.3 to the nearest
+    # step the receiver supports; :02X is the two-digit uppercase hex it expects.
     return f"{round(volume * VOLUME_STEPS):02X}"
 
 
@@ -49,6 +53,7 @@ SOURCE_CODES: dict[str, str] = {
     "aux": "03", "tv": "12", "phono": "22", "cd": "23", "fm": "24", "am": "25",
     "net": "2B", "bluetooth": "2E",
 }
+# Reverse lookup, for turning the receiver's replies back into names
 CODE_SOURCES = {code: name for name, code in SOURCE_CODES.items()}
 
 # Listening mode (LMD) codes. Several codes have older and newer meanings in
@@ -66,6 +71,7 @@ MODE_CODES: dict[str, str] = {
 CODE_MODES = {code: name for name, code in MODE_CODES.items()}
 
 
+# The name is what the client sees in the initialize handshake (serverInfo.name).
 mcp = MCPServer("onkyo")
 
 
@@ -83,6 +89,8 @@ mcp = MCPServer("onkyo")
 def build_packet(command: str, unit: str = "1") -> bytes:
     # unit "1" = receiver; "x" = any device type (used for discovery)
     data = f"!{unit}{command}\r".encode("ascii")
+    # struct format: ">" big-endian, "I" u32 header size, "I" u32 data size,
+    # "B" u8 version, "3x" three zero padding bytes. 4 + 4 + 4 + 1 + 3 = 16.
     return b"ISCP" + struct.pack(">IIB3x", 16, len(data), 1) + data
 
 
@@ -92,6 +100,8 @@ def decode_datagram(packet: bytes) -> str:
     if magic != b"ISCP":
         raise ValueError(f"Bad magic: {magic!r}")
     data = packet[header_size:header_size + data_size]
+    # Same stripping as read_packet, plus \x19, which can also turn up at
+    # the end of a UDP reply.
     return data.decode("ascii", "replace")[2:].rstrip("\x19\x1a\r\n")
 
 
@@ -102,22 +112,28 @@ async def discover(timeout: float = 3.0) -> list[dict]:
     """Broadcast "!xECNQSTN" on UDP 60128. Each receiver replies with
     "!1ECN<model>/<port>/<region>/<mac>", and the reply's source address is
     its IP."""
+    # Keyed by IP, so a receiver that answers twice is only listed once
     found: dict[str, dict] = {}
 
+    # asyncio calls datagram_received for every UDP packet that arrives on
+    # our socket, while discover() is sleeping below.
     class Listener(asyncio.DatagramProtocol):
         def datagram_received(self, data: bytes, addr: tuple) -> None:
             try:
                 msg = decode_datagram(data)
             except (ValueError, struct.error):
-                return
+                return  # not eISCP (some other device on the port): ignore it
             if not msg.startswith("ECN"):
                 return
+            # Pad with blanks so a reply with missing fields still unpacks
             model, port, region, mac = (msg[3:].split("/") + ["", "", "", ""])[:4]
+            # "0009B0623D93" -> "00:09:B0:62:3D:93"
             mac = ":".join(mac[i:i + 2] for i in range(0, 12, 2)) if len(mac) >= 12 else mac
             found[addr[0]] = {"host": addr[0], "model": model, "port": int(port or 60128),
                               "region": region, "mac": mac}
 
     loop = asyncio.get_running_loop()
+    # Port 0 = let the OS pick a free local port; replies come back to it.
     transport, _ = await loop.create_datagram_endpoint(
         Listener, local_addr=("0.0.0.0", 0), allow_broadcast=True
     )
@@ -130,6 +146,9 @@ async def discover(timeout: float = 3.0) -> list[dict]:
 
 
 async def read_packet(reader: asyncio.StreamReader) -> str:
+    """Read one eISCP packet from a TCP stream. TCP is a byte stream, not a
+    sequence of messages, so we read the fixed 16-byte header first to learn
+    how many data bytes follow."""
     header = await reader.readexactly(16)
     magic, header_size, data_size, _version = struct.unpack(">4sIIB3x", header)
     if magic != b"ISCP":
@@ -145,6 +164,8 @@ async def send(command: str, expect: str | None = None, timeout: float = 2.0,
     """Send one command to `host` (default: ONKYO_HOST). If `expect` is a
     3-char prefix (e.g. "MVL"), wait for the matching reply. The receiver also
     pushes unsolicited status messages, so we skip anything that doesn't match."""
+    # One short-lived connection per command: simpler than keeping a socket
+    # open, and it survives the receiver dropping idle connections.
     reader, writer = await asyncio.wait_for(
         asyncio.open_connection(host or HOST, PORT), timeout
     )
@@ -158,8 +179,10 @@ async def send(command: str, expect: str | None = None, timeout: float = 2.0,
             while True:
                 msg = await read_packet(reader)
                 if msg.startswith(expect):
-                    return msg[len(expect):]
+                    return msg[len(expect):]  # "MVL50" -> "50"
 
+        # One timeout around the whole loop, so a chatty receiver that never
+        # sends the reply we want can't keep us waiting forever.
         return await asyncio.wait_for(wait_for_match(), timeout)
     finally:
         writer.close()
@@ -171,9 +194,37 @@ async def send(command: str, expect: str | None = None, timeout: float = 2.0,
 # The docstring becomes the tool description the model reads, and the type
 # hints become the JSON Schema for the arguments. Write both carefully:
 # they are the model's only documentation.
+#
+# Tool annotations are hints about a tool's *behavior*, sent in tools/list:
+#   {"name": "set_volume", "title": "Set volume",
+#    "annotations": {"readOnlyHint": false, "destructiveHint": false,
+#                    "idempotentHint": true, "openWorldHint": false}, ...}
+# Clients use them to decide how careful to be, e.g. auto-approving read-only
+# tools but asking the user before destructive ones. They are only hints: a
+# client should not trust them from a server it doesn't trust, and they are
+# no substitute for real server-side limits like MAX_VOLUME.
+#
+# The spec's defaults are deliberately pessimistic (a tool with no
+# annotations counts as destructive, non-idempotent and open-world), so it
+# pays to state them.
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+# Queries: they change nothing on the receiver.
+# (destructiveHint and idempotentHint only matter when readOnlyHint is false.)
+READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+
+# Setters: they change state, but nothing is lost that another call can't put
+# back (not destructive), and sending "volume 30" twice leaves the receiver
+# exactly as sending it once (idempotent). Closed world: they only talk to a
+# receiver we were pointed at, not the wider internet.
+SETTER = ToolAnnotations(read_only_hint=False, destructive_hint=False,
+                         idempotent_hint=True, open_world_hint=False)
+
+
+# Discovery reads nothing but replies, so it is read-only. It is open-world,
+# though: it broadcasts to the whole LAN and lists whatever answers.
+@mcp.tool(title="Discover receivers",
+          annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
 async def discover_receivers() -> list[dict]:
     """Find Onkyo/Integra/Pioneer receivers on the local network. Returns each
     receiver's IP address, model, eISCP port and MAC address."""
@@ -188,7 +239,7 @@ Receiver = Annotated[str | None, Field(
 )]
 
 
-@mcp.tool()
+@mcp.tool(title="Get receiver status", annotations=READ_ONLY)
 async def get_status(receiver: Receiver = None) -> dict:
     """Get a receiver's current power state, master volume (0-100), mute
     state, selected input and listening mode. If there are several receivers
@@ -210,14 +261,14 @@ async def get_status(receiver: Receiver = None) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Set power", annotations=SETTER)
 async def set_power(on: bool, receiver: Receiver = None) -> str:
     """Turn the main zone on, or put it into standby."""
     reply = await send("PWR01" if on else "PWR00", expect="PWR", host=receiver)
     return f"Power is now {'on' if reply == '01' else 'standby'}"
 
 
-@mcp.tool()
+@mcp.tool(title="Set volume", annotations=SETTER)
 async def set_volume(level: float, receiver: Receiver = None) -> str:
     """Set master volume on the receiver's 0-100 display scale (0.5 steps on
     newer models). Values above the configured safety cap are clamped."""
@@ -229,14 +280,14 @@ async def set_volume(level: float, receiver: Receiver = None) -> str:
     return f"Volume is now {raw_to_volume(reply)}{note}"
 
 
-@mcp.tool()
+@mcp.tool(title="Set mute", annotations=SETTER)
 async def set_mute(muted: bool, receiver: Receiver = None) -> str:
     """Mute or unmute the main zone."""
     reply = await send("AMT01" if muted else "AMT00", expect="AMT", host=receiver)
     return "Muted" if reply == "01" else "Unmuted"
 
 
-@mcp.tool()
+@mcp.tool(title="Select input", annotations=SETTER)
 async def set_input(source: Source, receiver: Receiver = None) -> str:
     """Select the main zone's input source. Names match the receiver's
     front-panel labels (e.g. "bd-dvd" for the BD/DVD input, "net" for
@@ -247,7 +298,7 @@ async def set_input(source: Source, receiver: Receiver = None) -> str:
     return f"Input is now {CODE_SOURCES.get(reply, f'SLI{reply}')}"
 
 
-@mcp.tool()
+@mcp.tool(title="Set listening mode", annotations=SETTER)
 async def set_listening_mode(mode: ListeningMode, receiver: Receiver = None) -> str:
     """Set the main zone's listening mode (surround processing). "direct" and
     "pure-audio" play the source unprocessed; "dolby-surround" and
@@ -270,7 +321,9 @@ def main() -> None:
         if not receivers:
             print("No receivers answered. See README: Troubleshooting.", file=sys.stderr)
     else:
-        mcp.run()  # defaults to stdio transport
+        # Defaults to stdio transport: JSON-RPC over stdin/stdout, which is why
+        # nothing in the server may print() to stdout.
+        mcp.run()
 
 
 if __name__ == "__main__":

@@ -35,6 +35,20 @@ async def test_tools_list(client):
     assert set(mode["enum"]) == set(onkyo_mcp.MODE_CODES)
 
 
+async def test_tool_annotations(client):
+    tools = {t.name: t for t in (await client.list_tools()).tools}
+    # Every tool states its hints rather than falling back to the spec's
+    # pessimistic defaults (destructive, non-idempotent, open-world).
+    for tool in tools.values():
+        assert tool.title and tool.annotations is not None
+    assert tools["get_status"].annotations.read_only_hint is True
+    assert tools["discover_receivers"].annotations.open_world_hint is True
+    volume = tools["set_volume"].annotations
+    assert volume.read_only_hint is False
+    assert volume.destructive_hint is False
+    assert volume.idempotent_hint is True
+
+
 async def test_get_status(client):
     result = await client.call_tool("get_status", {})
     assert json.loads(text(result)) == {"receiver": "127.0.0.1", "power": "standby",

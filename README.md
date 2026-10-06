@@ -29,6 +29,10 @@ Every tool except `discover_receivers` takes an optional `receiver` argument
 (an IP address from `discover_receivers`) for networks with several receivers.
 Without it, tools talk to `ONKYO_HOST`.
 
+Each tool also declares MCP tool annotations. `discover_receivers` and
+`get_status` are read-only. The `set_*` tools are marked non-destructive and
+idempotent, so clients can tell they're safe to retry.
+
 ## Requirements
 
 - Python 3.11+
