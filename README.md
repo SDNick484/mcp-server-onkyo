@@ -32,7 +32,8 @@ port 60128) directly and needs nothing but the official MCP Python SDK.
 
 Every tool except `discover_receivers` takes an optional `receiver` argument
 (an IP address from `discover_receivers`) for networks with several receivers.
-Without it, tools talk to `ONKYO_HOST`.
+Without it, tools talk to `ONKYO_HOST`, or, if that's unset, to the one
+receiver discovery finds (with several, the model is asked to pick one).
 
 **Zones.** `get_status`, `set_power`, `set_volume`, `set_mute` and `set_input`
 take an optional `zone`: `main` (the default, the room the receiver is in),
@@ -115,7 +116,7 @@ All settings are environment variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ONKYO_HOST` | `192.168.1.50` | Default receiver IP address (tools that take a `receiver` argument can target others) |
+| `ONKYO_HOST` | none | Default receiver IP address (tools that take a `receiver` argument can target others). If unset, the server uses the one receiver that answers discovery |
 | `ONKYO_PORT` | `60128` | eISCP port |
 | `ONKYO_MAX_VOLUME` | `75` | Safety cap on the display scale. Enforced by the server, not left to the model |
 | `ONKYO_VOLUME_STEPS` | `2` | Raw volume steps per display unit: `2` for newer models with 0.5 steps (TX-NR6050, TX-NR7100), `1` for older ones |

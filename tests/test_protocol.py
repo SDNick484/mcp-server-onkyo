@@ -82,6 +82,6 @@ def test_empty_settings_use_defaults():
         "ONKYO_HOST", "ONKYO_PORT", "ONKYO_MAX_VOLUME", "ONKYO_VOLUME_STEPS",
         "ONKYO_TIMEOUT", "ONKYO_DEBUG", "ONKYO_DISCOVERY_ADDR")}}
     out = subprocess.run([sys.executable, "-c",
-                          "import onkyo_mcp as o; print(o.HOST, o.PORT, o.MAX_VOLUME, o.TIMEOUT)"],
+                          "import onkyo_mcp as o; print(repr(o.HOST), o.PORT, o.MAX_VOLUME, o.TIMEOUT)"],
                          env=env, capture_output=True, text=True, check=True)
-    assert out.stdout.split() == ["192.168.1.50", "60128", "75.0", "5.0"]
+    assert out.stdout.split() == ["''", "60128", "75.0", "5.0"]  # no host: use discovery

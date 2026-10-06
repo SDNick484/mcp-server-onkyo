@@ -24,6 +24,7 @@ async def receiver(monkeypatch):
     monkeypatch.setattr(onkyo_mcp, "DISCOVERY_ADDR", "127.0.0.1")
     # The fake answers instantly, so only tests that expect no reply ever wait
     monkeypatch.setattr(onkyo_mcp, "TIMEOUT", 0.5)
+    monkeypatch.setattr(onkyo_mcp, "_discovered_host", None)  # forget earlier tests' discovery
     yield fake_receiver.state
     udp.close()
     server.close()

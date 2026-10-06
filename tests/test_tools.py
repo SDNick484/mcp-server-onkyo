@@ -402,3 +402,30 @@ async def test_playing_station_still_listed_and_playable(client, receiver):
     assert result.structured_content["result"] == ["Shuffle", "Pearl Jam Radio", "Beyoncé Radio"]
     assert text(await client.call_tool("play_station", {"station": "beyoncé"})) == \
         "Playing Beyoncé Radio on pandora"
+
+
+
+async def test_no_host_uses_the_one_discovered_receiver(client, receiver, monkeypatch):
+    monkeypatch.setattr(onkyo_mcp, "HOST", "")  # ONKYO_HOST unset
+    result = json.loads(text(await client.call_tool("get_status", {})))
+    assert result["receiver"] == "127.0.0.1"  # the fake answered discovery
+    assert onkyo_mcp._discovered_host == "127.0.0.1"  # remembered for later calls
+
+
+async def test_no_host_and_nothing_discovered_says_so(client, receiver, monkeypatch):
+    monkeypatch.setattr(onkyo_mcp, "HOST", "")
+    monkeypatch.setattr(onkyo_mcp, "DISCOVERY_ADDR", "127.0.0.2")  # nobody there
+    result = await client.call_tool("set_mute", {"muted": True})
+    assert result.is_error and "Set ONKYO_HOST" in text(result)
+    assert receiver["AMT"] == "00"  # nothing was sent anywhere
+
+
+async def test_no_host_and_several_receivers_asks_which(client, receiver, monkeypatch):
+    async def two_receivers(timeout=3.0):
+        return [{"host": "192.168.1.147", "model": "TX-NR6050"},
+                {"host": "192.168.1.245", "model": "TX-NR7100"}]
+    monkeypatch.setattr(onkyo_mcp, "HOST", "")
+    monkeypatch.setattr(onkyo_mcp, "discover", two_receivers)
+    result = await client.call_tool("get_status", {})
+    assert result.is_error
+    assert "TX-NR6050 at 192.168.1.147, TX-NR7100 at 192.168.1.245" in text(result)

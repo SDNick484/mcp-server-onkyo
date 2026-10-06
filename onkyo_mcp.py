@@ -38,7 +38,9 @@ def setting(name: str, default: str) -> str:
     return os.environ.get(name) or default
 
 
-HOST = setting("ONKYO_HOST", "192.168.1.50")
+# No default address: a made-up one would send commands to whatever device
+# happens to have it. Unset means "use the one receiver discovery finds".
+HOST = setting("ONKYO_HOST", "")
 PORT = int(setting("ONKYO_PORT", "60128"))
 # Volume as shown on the receiver's display (0-100). Server-side guardrail.
 MAX_VOLUME = float(setting("ONKYO_MAX_VOLUME", "75"))
@@ -233,7 +235,7 @@ async def read_packet(reader: asyncio.StreamReader) -> str:
 
 async def send(command: str, expect: str | None = None, timeout: float | None = None,
                host: str | None = None) -> str | None:
-    """Send one command to `host` (default: ONKYO_HOST). If `expect` is a
+    """Send one command to `host` (default: ONKYO_HOST, required if unset). If `expect` is a
     3-char prefix (e.g. "MVL"), wait for the matching reply. The receiver also
     pushes unsolicited status messages, so we skip anything that doesn't match.
 
@@ -248,6 +250,8 @@ async def send(command: str, expect: str | None = None, timeout: float | None = 
     # One short-lived connection per command: simpler than keeping a socket
     # open, and it survives the receiver dropping idle connections.
     host = host or HOST
+    if not host:
+        raise ValueError("no receiver address: pass host, or set ONKYO_HOST")
     timeout = timeout or TIMEOUT
     try:
         reader, writer = await asyncio.wait_for(
@@ -399,12 +403,37 @@ async def discover_receivers() -> list[dict]:
     return await discover()
 
 
-# Optional, so single-receiver setups (ONKYO_HOST) keep working unchanged.
+# Optional, so single-receiver setups (ONKYO_HOST, or one receiver found by
+# discovery) keep working unchanged.
 # The Field description lands in the tool's JSON Schema next to the type.
 Receiver = Annotated[str | None, Field(
     description="IP address of the receiver, as returned by discover_receivers. "
                 "Omit to use the default receiver."
 )]
+
+
+_discovered_host: str | None = None
+
+
+async def resolve_host(receiver: str | None) -> str:
+    """The receiver to talk to: the one the model named, else ONKYO_HOST, else
+    the only receiver that answers discovery (remembered for later calls)."""
+    global _discovered_host
+    if receiver or HOST:
+        return receiver or HOST
+    if _discovered_host is None:
+        found = await discover(timeout=2.0)
+        if len(found) > 1:
+            listing = ", ".join(f"{r['model']} at {r['host']}" for r in found)
+            raise ToolError(f"Several receivers found ({listing}): pass the one you "
+                            "want as receiver.")
+        if not found:
+            raise ToolError("No receiver is configured and none answered discovery. "
+                            "Set ONKYO_HOST to the receiver's IP address (see the "
+                            "README: When discovery finds nothing).")
+        _discovered_host = found[0]["host"]
+        log.info("Using %s at %s (found by discovery)", found[0]["model"], _discovered_host)
+    return _discovered_host
 
 
 async def call_receiver(command: str, expect: str | None, receiver: str | None,
@@ -421,7 +450,7 @@ async def call_receiver(command: str, expect: str | None, receiver: str | None,
 
     `no_reply` replaces the guesswork below with a specific message, for
     commands where silence has an obvious meaning."""
-    host = receiver or HOST
+    host = await resolve_host(receiver)
     power_code = ZONE_CODES[zone]["power"]
     # Starts every error message: "The receiver at ..." / "Zone 2 of the receiver at ..."
     who = f"The receiver at {host}" if zone == "main" else f"{ZONE_LABELS[zone]} of the receiver at {host}"
@@ -474,7 +503,7 @@ async def get_status(receiver: Receiver = None, zone: ZoneArg = "main") -> dict:
     mode and "other_zones": the power state of each other zone the receiver
     has, so you know which to ask about. If there are several receivers on
     the network, call discover_receivers first and pass the one you want."""
-    host = receiver or HOST
+    host = await resolve_host(receiver)
     await check_zone(host, zone)
     codes = ZONE_CODES[zone]
     power = await call_receiver(f"{codes['power']}QSTN", codes["power"], host, zone=zone)
@@ -525,7 +554,7 @@ async def check_zone(receiver: str | None, zone: Zone, volume: bool = False) -> 
     receiver just stays silent and the model gets a timeout after seconds."""
     if zone == "main":
         return
-    host = receiver or HOST
+    host = await resolve_host(receiver)
     try:
         layout = await zone_layout(host)
     except OSError:  # includes TimeoutError
@@ -653,7 +682,7 @@ async def get_now_playing(receiver: Receiver = None) -> dict:
     title, artist, album and position, plus the menu its screen is showing
     (which can differ: browsing doesn't stop playback). Every zone whose input
     is "net" plays this; check get_status to see which zones are on "net"."""
-    host = receiver or HOST
+    host = await resolve_host(receiver)
     # NMS (menu status) ends with the playing service's icon code, e.g.
     # "MxxxxS104" = Pandora. NLT is the menu on screen, e.g. "...NET" when
     # someone has gone back to the top menu while Pandora keeps playing.
@@ -718,7 +747,7 @@ async def list_stations(service: NetService = "pandora", receiver: Receiver = No
     Pandora, your stations ("Shuffle", "Pearl Jam Radio", ...). Pass one of
     the names to play_station. This opens the service's menu on the receiver
     but doesn't interrupt what's playing."""
-    titles = [title for _, title in await service_menu(service, receiver or HOST)]
+    titles = [title for _, title in await service_menu(service, await resolve_host(receiver))]
     return list(dict.fromkeys(titles))  # each name once, in menu order
 
 
@@ -729,7 +758,7 @@ async def play_station(station: str, service: NetService = "pandora",
     Jam Radio" on Pandora). Names come from list_stations; a distinctive part
     of a name is enough ("pearl jam"). It plays in every zone whose input is
     "net": set a zone's input to "net" first to hear it."""
-    host = receiver or HOST
+    host = await resolve_host(receiver)
     items = await service_menu(service, host)
     wanted = station.casefold().strip()
     matches = ([item for item in items if item[1].casefold() == wanted]
@@ -760,7 +789,7 @@ async def control_playback(action: PlaybackAction, receiver: Receiver = None) ->
     player (shared by every zone on "net"). "play" resumes what was paused;
     to start a station, use play_station. Services limit skipping: Pandora
     allows a few skips per hour and can't go back."""
-    host = receiver or HOST
+    host = await resolve_host(receiver)
     code, state = PLAYBACK_CODES[action]
     if state:
         await call_receiver(f"NTC{code}", f"NST{state}", host,
