@@ -107,14 +107,16 @@ MODE_CODES: dict[str, str] = {
 CODE_MODES = {code: name for name, code in MODE_CODES.items()}
 
 # Network services (NSV codes): the services the Onkyo Controller app offers
-# for a TX-NR6050/7100. Codes as the receivers list them in their own
+# for a TX-NR6050/7100, plus TuneIn, which both list though the app doesn't
+# show it. Codes as the receivers list them in their own
 # description (NRIQSTN, <netservicelist>); onkyo-eiscp's tables have TIDAL as
 # 19, AirPlay as 18 and no Amazon Music. Most services must be signed in on
 # the receiver first. Verified on a TX-NR6050: pandora.
-NetService = Literal["pandora", "spotify", "deezer", "tidal", "amazon-music", "airplay"]
+NetService = Literal["pandora", "spotify", "deezer", "tidal", "amazon-music", "airplay",
+                     "tunein"]
 NET_SERVICE_CODES: dict[str, str] = {
     "pandora": "04", "spotify": "0A", "deezer": "12", "tidal": "1B",
-    "amazon-music": "1C", "airplay": "44",
+    "amazon-music": "1C", "airplay": "44", "tunein": "0E",
 }
 CODE_NET_SERVICES = {code: name for name, code in NET_SERVICE_CODES.items()}
 # NST play state: first character of the reply ("Pxx1" = playing)

@@ -45,7 +45,7 @@ Observed on real hardware (TX-NR7100 is the awkward one; the TX-NR6050 answers i
   Zone 2 but no Zone 3 (silence, or `N/A` for SL3). Zones in standby accept input
   changes and answer `N/A` (not silence) to volume/mute.
 - Network services in the owner's Onkyo app: Pandora, Spotify, Deezer, AirPlay,
-  TIDAL, Amazon Music. Authoritative NSV codes come from the receiver itself:
+  TIDAL, Amazon Music; the receivers also list TuneIn (0e), so it's offered too. Authoritative NSV codes come from the receiver itself:
   `NRIQSTN` returns XML with <netservicelist> (AirPlay is 44, TIDAL 1b, Amazon 1c;
   the onkyo-eiscp tables are wrong or missing for these) and <zonelist> (value=1
   present, volmax=0 no volume control). The server caches the zone list per host.
