@@ -75,6 +75,7 @@ All settings are environment variables:
 | `ONKYO_MAX_VOLUME` | `50` | Safety cap on the display scale. Enforced by the server, not left to the model |
 | `ONKYO_VOLUME_STEPS` | `2` | Raw volume steps per display unit: `2` for newer models with 0.5 steps (TX-NR6050, TX-NR7100), `1` for older ones |
 | `ONKYO_DISCOVERY_ADDR` | `255.255.255.255` | Where the discovery query is sent |
+| `ONKYO_DEBUG` | off | `1` logs all MCP and eISCP traffic to stderr (same as `--debug`). See [Debugging](#debugging) |
 
 ## Use with Claude Code
 
@@ -121,6 +122,25 @@ pytest
 
 The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) lets you
 browse `tools/list`, call tools by hand and watch the JSON-RPC traffic.
+
+### Debugging
+
+Set `ONKYO_DEBUG=1` or pass `--debug` to log both conversations the server
+has, to stderr: MCP messages with the client (`MCP <-` / `MCP ->`, tagged with
+the JSON-RPC id) and eISCP packets with the receiver (`eISCP ->` / `eISCP <-`):
+
+```
+08:11:59 MCP <- [2] tools/call {"name": "set_volume", "arguments": {"level": 30}}
+08:11:59 eISCP -> 127.0.0.1 MVL3C
+08:11:59 eISCP <- 127.0.0.1 NLSU0-Now Playing (unsolicited, skipped)
+08:11:59 eISCP <- 127.0.0.1 MVL3C
+08:11:59 MCP -> [2] {"content": [{"text": "Volume is now 30.0", "type": "text"}], ...}
+```
+
+It works with `--discover` too, to see which UDP replies arrive. Under Claude
+Code, register the server with `-e ONKYO_DEBUG=1`; stderr ends up in Claude
+Code's MCP logs (run `claude --debug` to see them). The MCP Inspector shows
+stderr in its UI.
 
 `CLAUDE.md` holds project conventions for working on the code with Claude Code.
 

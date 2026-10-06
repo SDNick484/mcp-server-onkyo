@@ -12,16 +12,22 @@ Find receivers on your network (prints IP, model, MAC):
 
 Inspect interactively (shows tools/list, lets you call tools by hand):
     npx @modelcontextprotocol/inspector python onkyo_mcp.py
+
+Log MCP and eISCP traffic to stderr (either works; also with --discover):
+    ONKYO_DEBUG=1 mcp-server-onkyo
+    mcp-server-onkyo --debug
 """
 
 import asyncio
+import json
+import logging
 import os
 import struct
 from typing import Annotated, Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 HOST = os.environ.get("ONKYO_HOST", "192.168.1.50")
 PORT = int(os.environ.get("ONKYO_PORT", "60128"))
@@ -30,6 +36,21 @@ MAX_VOLUME = float(os.environ.get("ONKYO_MAX_VOLUME", "50"))
 # Raw MVL steps per display unit. 2021+ models (TX-NR6050, TX-NR7100) use
 # 0.5 steps, so raw 0x00-0xC8 maps to 0.0-100.0 -> 2. Older models: 1.
 VOLUME_STEPS = int(os.environ.get("ONKYO_VOLUME_STEPS", "2"))
+# Traffic logging (see enable_debug). Also switched on by --debug.
+DEBUG = os.environ.get("ONKYO_DEBUG", "").lower() in ("1", "true", "yes", "on")
+
+# Everything goes through this logger, which writes to stderr: on the stdio
+# transport, stdout belongs to JSON-RPC. Silent (WARNING) unless debugging.
+log = logging.getLogger("onkyo_mcp")
+
+
+def enable_debug() -> None:
+    """Log every MCP message and eISCP packet to stderr, at DEBUG level."""
+    handler = logging.StreamHandler()  # defaults to sys.stderr
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+    log.addHandler(handler)
+    log.setLevel(logging.DEBUG)
+    log.propagate = False  # the SDK configures the root logger too; don't log twice
 
 
 def raw_to_volume(raw: str) -> float:
@@ -122,7 +143,9 @@ async def discover(timeout: float = 3.0) -> list[dict]:
             try:
                 msg = decode_datagram(data)
             except (ValueError, struct.error):
+                log.debug("eISCP <- %s (UDP) not eISCP, ignored: %r", addr[0], data[:32])
                 return  # not eISCP (some other device on the port): ignore it
+            log.debug("eISCP <- %s (UDP) %s", addr[0], msg)
             if not msg.startswith("ECN"):
                 return
             # Pad with blanks so a reply with missing fields still unpacks
@@ -138,6 +161,7 @@ async def discover(timeout: float = 3.0) -> list[dict]:
         Listener, local_addr=("0.0.0.0", 0), allow_broadcast=True
     )
     try:
+        log.debug("eISCP -> %s (UDP broadcast) ECNQSTN", DISCOVERY_ADDR)
         transport.sendto(build_packet("ECNQSTN", unit="x"), (DISCOVERY_ADDR, PORT))
         await asyncio.sleep(timeout)  # collect every reply that arrives in the window
     finally:
@@ -166,10 +190,12 @@ async def send(command: str, expect: str | None = None, timeout: float = 2.0,
     pushes unsolicited status messages, so we skip anything that doesn't match."""
     # One short-lived connection per command: simpler than keeping a socket
     # open, and it survives the receiver dropping idle connections.
+    host = host or HOST
     reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(host or HOST, PORT), timeout
+        asyncio.open_connection(host, PORT), timeout
     )
     try:
+        log.debug("eISCP -> %s %s", host, command)
         writer.write(build_packet(command))
         await writer.drain()
         if expect is None:
@@ -179,7 +205,9 @@ async def send(command: str, expect: str | None = None, timeout: float = 2.0,
             while True:
                 msg = await read_packet(reader)
                 if msg.startswith(expect):
+                    log.debug("eISCP <- %s %s", host, msg)
                     return msg[len(expect):]  # "MVL50" -> "50"
+                log.debug("eISCP <- %s %s (unsolicited, skipped)", host, msg)
 
         # One timeout around the whole loop, so a chatty receiver that never
         # sends the reply we want can't keep us waiting forever.
@@ -187,6 +215,45 @@ async def send(command: str, expect: str | None = None, timeout: float = 2.0,
     finally:
         writer.close()
         await writer.wait_closed()
+
+
+# ---------------------------------------------------------------------------
+# Debug logging of MCP traffic.
+#
+# Middleware wraps every request and notification the client sends us, after
+# the SDK has parsed the JSON-RPC envelope but before it dispatches to a
+# handler. So it sees the same method/params/result the wire carries, e.g.
+#   MCP <- [3] tools/call {"name": "set_volume", "arguments": {"level": 30}}
+#   MCP -> [3] {"content": [{"type": "text", "text": "Volume is now 30.0"}], ...}
+# The [3] is the JSON-RPC id that pairs a response with its request;
+# notifications (like notifications/initialized) have none and get no reply.
+# Using middleware instead of tapping stdin/stdout means it also works
+# unchanged on other transports (e.g. streamable HTTP).
+# ---------------------------------------------------------------------------
+
+def to_json(value) -> str:
+    if isinstance(value, BaseModel):
+        # by_alias: inputSchema rather than input_schema, as on the wire
+        value = value.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return json.dumps(value, default=str)
+
+
+async def log_traffic(ctx, call_next):
+    if not log.isEnabledFor(logging.DEBUG):
+        return await call_next(ctx)
+    tag = f"[{ctx.request_id}] " if ctx.request_id is not None else ""
+    log.debug("MCP <- %s%s %s", tag, ctx.method, to_json(ctx.params or {}))
+    try:
+        result = await call_next(ctx)
+    except Exception as exc:  # protocol errors (unknown method, bad params) arrive as exceptions
+        log.debug("MCP -> %serror: %r", tag, exc)
+        raise
+    if ctx.request_id is not None:
+        log.debug("MCP -> %s%s", tag, to_json(result))
+    return result
+
+
+mcp.middleware.append(log_traffic)
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +380,9 @@ async def set_listening_mode(mode: ListeningMode, receiver: Receiver = None) -> 
 
 def main() -> None:
     import sys
+
+    if DEBUG or "--debug" in sys.argv:
+        enable_debug()
 
     if "--discover" in sys.argv:  # quick CLI check, no MCP involved
         receivers = asyncio.run(discover())

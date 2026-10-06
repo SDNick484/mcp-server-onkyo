@@ -4,6 +4,7 @@ This tests the contract the model actually sees: tools/list schemas, argument
 validation, and tool results, not just the Python functions underneath.
 """
 import json
+import logging
 
 import pytest
 from mcp import Client
@@ -170,3 +171,21 @@ async def test_set_listening_mode_invalid_name(client, receiver):
     result = await client.call_tool("set_listening_mode", {"mode": "thx"})
     assert result.is_error
     assert receiver["LMD"] == "00"  # unchanged
+
+
+async def test_debug_logs_mcp_and_eiscp_traffic(client, receiver, caplog):
+    caplog.set_level(logging.DEBUG, logger="onkyo_mcp")
+    await client.call_tool("set_mute", {"muted": True})
+    lines = [r.getMessage() for r in caplog.records if r.name == "onkyo_mcp"]
+    # In order: the request in, the packets out and back, the result out
+    assert any(m.startswith("MCP <- [") and "tools/call" in m and '"muted": true' in m for m in lines)
+    assert "eISCP -> 127.0.0.1 AMT01" in lines
+    assert "eISCP <- 127.0.0.1 NLSU0-Now Playing (unsolicited, skipped)" in lines
+    assert "eISCP <- 127.0.0.1 AMT01" in lines
+    assert any(m.startswith("MCP -> [") and "Muted" in m for m in lines)
+
+
+async def test_no_traffic_logged_by_default(client, receiver, caplog):
+    caplog.set_level(logging.INFO)  # anything below WARNING stays silent unless debugging
+    await client.call_tool("set_mute", {"muted": True})
+    assert not [r for r in caplog.records if r.name == "onkyo_mcp"]
