@@ -66,3 +66,9 @@ def test_listening_mode_literal_matches_code_table():
 
 def test_listening_mode_codes_are_unique():
     assert len(CODE_MODES) == len(MODE_CODES)
+
+
+def test_decode_datagram_utf8():
+    data = "!1NTIDéjà Vu\x1a\r\n".encode("utf-8")
+    pkt = b"ISCP" + struct.pack(">IIB3x", 16, len(data), 1) + data
+    assert decode_datagram(pkt) == "NTIDéjà Vu"

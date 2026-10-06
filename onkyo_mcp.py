@@ -74,11 +74,12 @@ def volume_to_raw(volume: float) -> str:
 # The Literal type becomes a JSON Schema "enum", so the model can only pick
 # one of these names. Keep the two in sync.
 Source = Literal["bd-dvd", "game", "cbl-sat", "strm-box", "pc", "aux", "tv",
-                 "phono", "cd", "fm", "am", "net", "bluetooth"]
+                 "phono", "cd", "fm", "am", "net", "bluetooth", "same-as-main"]
 SOURCE_CODES: dict[str, str] = {
     "bd-dvd": "10", "game": "02", "cbl-sat": "01", "strm-box": "11", "pc": "05",
     "aux": "03", "tv": "12", "phono": "22", "cd": "23", "fm": "24", "am": "25",
     "net": "2B", "bluetooth": "2E",
+    "same-as-main": "80",  # zones 2/3 only: play whatever the main zone plays
 }
 # Reverse lookup, for turning the receiver's replies back into names
 CODE_SOURCES = {code: name for name, code in SOURCE_CODES.items()}
@@ -96,6 +97,31 @@ MODE_CODES: dict[str, str] = {
     "game-sports": "0E",
 }
 CODE_MODES = {code: name for name, code in MODE_CODES.items()}
+
+# Network services (NSV codes, from onkyo-eiscp's table). What a receiver
+# offers depends on model, region and firmware, and most services must be
+# signed in on the receiver first. Verified on a TX-NR6050: pandora.
+NetService = Literal["pandora", "tunein", "spotify", "deezer", "tidal",
+                     "iheartradio", "siriusxm", "music-server"]
+NET_SERVICE_CODES: dict[str, str] = {
+    "music-server": "00", "siriusxm": "03", "pandora": "04", "spotify": "0A",
+    "tunein": "0E", "deezer": "12", "iheartradio": "13", "tidal": "19",
+}
+CODE_NET_SERVICES = {code: name for name, code in NET_SERVICE_CODES.items()}
+# NST play state: first character of the reply ("Pxx1" = playing)
+PLAY_STATES = {"P": "playing", "p": "paused", "S": "stopped", "F": "fast-forward",
+               "R": "rewind", "E": "end"}
+
+# Zones 2 and 3 drive speakers in other rooms. Each zone has its own power,
+# volume, mute and input, with its own 3-letter command for each. Volumes and
+# input codes use the same scale and table as the main zone.
+Zone = Literal["main", "zone2", "zone3"]
+ZONE_CODES: dict[str, dict[str, str]] = {
+    "main":  {"power": "PWR", "volume": "MVL", "mute": "AMT", "input": "SLI"},
+    "zone2": {"power": "ZPW", "volume": "ZVL", "mute": "ZMT", "input": "SLZ"},
+    "zone3": {"power": "PW3", "volume": "VL3", "mute": "MT3", "input": "SL3"},
+}
+ZONE_LABELS = {"main": "Main zone", "zone2": "Zone 2", "zone3": "Zone 3"}
 
 
 # The name is what the client sees in the initialize handshake (serverInfo.name).
@@ -129,7 +155,7 @@ def decode_datagram(packet: bytes) -> str:
     data = packet[header_size:header_size + data_size]
     # Same stripping as read_packet, plus \x19, which can also turn up at
     # the end of a UDP reply.
-    return data.decode("ascii", "replace")[2:].rstrip("\x19\x1a\r\n")
+    return data.decode("utf-8", "replace")[2:].rstrip("\x19\x1a\r\n")
 
 
 DISCOVERY_ADDR = os.environ.get("ONKYO_DISCOVERY_ADDR", "255.255.255.255")
@@ -185,8 +211,9 @@ async def read_packet(reader: asyncio.StreamReader) -> str:
         raise ValueError(f"Bad magic: {magic!r}")
     await reader.readexactly(header_size - 16)  # normally 0 bytes
     data = await reader.readexactly(data_size)
-    # Strip "!1" prefix and the \x1a / \r / \n terminators
-    return data.decode("ascii", "replace")[2:].rstrip("\x1a\r\n")
+    # Strip "!1" prefix and the \x1a / \r / \n terminators. Text (track
+    # titles, station names) is UTF-8: "Beyoncé" must not become "Beyonc��".
+    return data.decode("utf-8", "replace")[2:].rstrip("\x1a\r\n")
 
 
 async def send(command: str, expect: str | None = None, timeout: float | None = None,
@@ -331,7 +358,8 @@ Receiver = Annotated[str | None, Field(
 
 
 async def call_receiver(command: str, expect: str, receiver: str | None,
-                        timeout: float | None = None) -> str:
+                        timeout: float | None = None, zone: Zone = "main",
+                        no_reply: str | None = None) -> str:
     """send() for tools: turns network failures into a ToolError whose message
     tells the model what went wrong.
 
@@ -339,93 +367,149 @@ async def call_receiver(command: str, expect: str, receiver: str | None,
     a crash and keeps the details on the server. The model only sees
     "Error executing tool set_volume", so it can't tell the user anything
     useful. A ToolError is a failure we raised on purpose, and its message is
-    sent to the model as an isError result."""
+    sent to the model as an isError result.
+
+    `no_reply` replaces the guesswork below with a specific message, for
+    commands where silence has an obvious meaning."""
     host = receiver or HOST
+    power_code = ZONE_CODES[zone]["power"]
+    # Starts every error message: "The receiver at ..." / "Zone 2 of the receiver at ..."
+    who = f"The receiver at {host}" if zone == "main" else f"{ZONE_LABELS[zone]} of the receiver at {host}"
     try:
         return await send(command, expect=expect, host=host, timeout=timeout)
     except TimeoutError as exc:
-        # Connected, but no reply. Receivers in standby still answer queries,
-        # but some (TX-NR7100) silently ignore everything else, so ask which.
-        if not command.startswith("PWR"):
+        # Connected, but no reply. Work out the likeliest reason.
+        if no_reply:
+            raise ToolError(no_reply) from exc
+        if expect == power_code and zone != "main":
+            # A working zone answers its power command even in standby. So
+            # silence means it doesn't exist (TX-NR6050 zone 3), or isn't set
+            # up (TX-NR7100 zone 3 answers queries but ignores power-on).
+            label = ZONE_LABELS[zone]
+            raise ToolError(f"The receiver at {host} didn't answer for {label}: it doesn't "
+                            f"have {label}, or {label} isn't set up in its speaker "
+                            "configuration.") from exc
+        if expect != power_code and not command.endswith("QSTN"):
+            # A setter got no reply. A zone in standby still answers queries,
+            # but some receivers (TX-NR7100) silently ignore setters, so ask
+            # the zone's power state.
             try:
-                standby = await send("PWRQSTN", expect="PWR", host=host) == "00"
+                power = await send(f"{power_code}QSTN", expect=power_code, host=host)
             except OSError:  # includes TimeoutError
-                standby = False
-            if standby:
-                raise ToolError(f"The receiver at {host} is in standby. "
-                                "Turn it on with set_power first.") from exc
-        raise ToolError(f"The receiver at {host} didn't reply in time. If it was just "
-                        "turned on, it may still be starting up (some models take about "
-                        "15 seconds): wait a few seconds and try again.") from exc
+                power = None
+            if power == "00":
+                how = "set_power" if zone == "main" else f"set_power with zone={zone!r}"
+                raise ToolError(f"{who} is in standby. "
+                                f"Turn it on with {how} first.") from exc
+        raise ToolError(f"{who} didn't reply in time. If it was "
+                        "just turned on, it may still be starting up (some models take "
+                        "about 15 seconds): wait a few seconds and try again.") from exc
     except OSError as exc:
         raise ToolError(f"Can't connect to a receiver at {host} ({exc}). Check the "
                         "IP address, and that the receiver is on the network.") from exc
 
 
+# Optional too, defaulting to the main zone (the room the receiver is in)
+ZoneArg = Annotated[Zone, Field(
+    description="Which zone: \"main\" is the room the receiver is in; \"zone2\" and "
+                "\"zone3\" are speakers in other rooms. Not every receiver has zone3."
+)]
+
+
 @mcp.tool(title="Get receiver status", annotations=READ_ONLY)
-async def get_status(receiver: Receiver = None) -> dict:
-    """Get a receiver's current power state, master volume (0-100), mute
-    state, selected input and listening mode. If there are several receivers
-    on the network, call discover_receivers first and pass the one you want."""
+async def get_status(receiver: Receiver = None, zone: ZoneArg = "main") -> dict:
+    """Get one zone's power state, volume (0-100), mute state and selected
+    input, plus the listening mode for the main zone. Each zone is separate:
+    to see whether music is playing in another room, ask for zone2 or zone3.
+    If there are several receivers on the network, call discover_receivers
+    first and pass the one you want."""
     host = receiver or HOST
-    power = await call_receiver("PWRQSTN", "PWR", host)
-    volume = await call_receiver("MVLQSTN", "MVL", host)
-    mute = await call_receiver("AMTQSTN", "AMT", host)
-    source = await call_receiver("SLIQSTN", "SLI", host)
-    mode = await call_receiver("LMDQSTN", "LMD", host)
-    return {
+    codes = ZONE_CODES[zone]
+    power = await call_receiver(f"{codes['power']}QSTN", codes["power"], host, zone=zone)
+    if power == "N/A":
+        raise ToolError(f"The receiver at {host} doesn't have {ZONE_LABELS[zone]}.")
+    volume = await call_receiver(f"{codes['volume']}QSTN", codes["volume"], host, zone=zone)
+    mute = await call_receiver(f"{codes['mute']}QSTN", codes["mute"], host, zone=zone)
+    source = await call_receiver(f"{codes['input']}QSTN", codes["input"], host, zone=zone)
+    status = {
         "receiver": host,  # so the model can tell answers from different receivers apart
+        "zone": zone,
         "power": "on" if power == "01" else "standby",
         "volume": raw_to_volume(volume) if volume and volume != "N/A" else None,
         "muted": mute == "01",
         # Unknown codes (not in our tables) are shown raw, e.g. "SLI2C"
-        "input": CODE_SOURCES.get(source, f"SLI{source}") if source and source != "N/A" else None,
-        "listening_mode": CODE_MODES.get(mode, f"LMD{mode}") if mode and mode != "N/A" else None,
+        "input": CODE_SOURCES.get(source, f"{codes['input']}{source}")
+                 if source and source != "N/A" else None,
     }
+    if zone == "main":  # zones 2/3 have no surround processing
+        mode = await call_receiver("LMDQSTN", "LMD", host)
+        status["listening_mode"] = CODE_MODES.get(mode, f"LMD{mode}") if mode and mode != "N/A" else None
+    return status
+
+
+def zone_prefix(zone: Zone) -> str:
+    # Replies for the main zone read as before ("Volume is now 30.0"); other
+    # zones say which one they're about ("Zone 2: Volume is now 30.0").
+    return "" if zone == "main" else f"{ZONE_LABELS[zone]}: "
 
 
 @mcp.tool(title="Set power", annotations=SETTER)
-async def set_power(on: bool, receiver: Receiver = None) -> str:
-    """Turn the main zone on, or put it into standby. After power-on, some
-    receivers need about 15 seconds before they accept other commands."""
+async def set_power(on: bool, receiver: Receiver = None, zone: ZoneArg = "main") -> str:
+    """Turn a zone on, or put it into standby. Zones are independent: zone2
+    can play while the main zone is in standby. After power-on, some receivers
+    need about 15 seconds before they accept other commands."""
+    code = ZONE_CODES[zone]["power"]
     # Power changes are slow to confirm (a TX-NR7100 takes ~10s to reach standby)
-    reply = await call_receiver("PWR01" if on else "PWR00", "PWR", receiver,
-                                timeout=3 * TIMEOUT)
+    reply = await call_receiver(f"{code}01" if on else f"{code}00", code, receiver,
+                                timeout=3 * TIMEOUT, zone=zone)
+    if reply == "N/A":
+        raise ToolError(f"The receiver rejected the command: it may not have {ZONE_LABELS[zone]}.")
     if reply == "01":
         # The TX-NR7100 confirms power-on, then ignores commands for ~15s
-        return ("Power is now on. Some receivers need about 15 seconds to start up "
-                "before they accept other commands.")
-    return "Power is now standby"
+        return (f"{zone_prefix(zone)}Power is now on. Some receivers need about 15 "
+                "seconds to start up before they accept other commands.")
+    return f"{zone_prefix(zone)}Power is now standby"
 
 
 @mcp.tool(title="Set volume", annotations=SETTER)
-async def set_volume(level: float, receiver: Receiver = None) -> str:
-    """Set master volume on the receiver's 0-100 display scale (0.5 steps on
-    newer models). Values above the configured safety cap are clamped."""
+async def set_volume(level: float, receiver: Receiver = None, zone: ZoneArg = "main") -> str:
+    """Set a zone's volume on the receiver's 0-100 display scale (0.5 steps on
+    newer models). Values above the configured safety cap are clamped; the
+    cap applies to every zone."""
     clamped = max(0.0, min(level, MAX_VOLUME))
-    reply = await call_receiver(f"MVL{volume_to_raw(clamped)}", "MVL", receiver)
+    code = ZONE_CODES[zone]["volume"]
+    reply = await call_receiver(f"{code}{volume_to_raw(clamped)}", code, receiver, zone=zone)
     if reply == "N/A":
-        return "Receiver rejected the volume change (is it powered on?)"
+        return (f"{zone_prefix(zone)}Receiver rejected the volume change. The zone may be "
+                "off, or its volume may be fixed in the receiver's setup (zones that "
+                "feed another amplifier often are).")
     note = f" (requested {level}, capped at {MAX_VOLUME})" if clamped != level else ""
-    return f"Volume is now {raw_to_volume(reply)}{note}"
+    return f"{zone_prefix(zone)}Volume is now {raw_to_volume(reply)}{note}"
 
 
 @mcp.tool(title="Set mute", annotations=SETTER)
-async def set_mute(muted: bool, receiver: Receiver = None) -> str:
-    """Mute or unmute the main zone."""
-    reply = await call_receiver("AMT01" if muted else "AMT00", "AMT", receiver)
-    return "Muted" if reply == "01" else "Unmuted"
+async def set_mute(muted: bool, receiver: Receiver = None, zone: ZoneArg = "main") -> str:
+    """Mute or unmute a zone."""
+    code = ZONE_CODES[zone]["mute"]
+    reply = await call_receiver(f"{code}01" if muted else f"{code}00", code, receiver, zone=zone)
+    if reply == "N/A":
+        return f"{zone_prefix(zone)}Receiver rejected the mute change (is the zone on?)"
+    return zone_prefix(zone) + ("Muted" if reply == "01" else "Unmuted")
 
 
 @mcp.tool(title="Select input", annotations=SETTER)
-async def set_input(source: Source, receiver: Receiver = None) -> str:
-    """Select the main zone's input source. Names match the receiver's
-    front-panel labels (e.g. "bd-dvd" for the BD/DVD input, "net" for
-    network streaming). The receiver must be on."""
-    reply = await call_receiver(f"SLI{SOURCE_CODES[source]}", "SLI", receiver)
+async def set_input(source: Source, receiver: Receiver = None, zone: ZoneArg = "main") -> str:
+    """Select a zone's input source. Names match the receiver's front-panel
+    labels (e.g. "bd-dvd" for the BD/DVD input, "net" for network streaming).
+    "same-as-main" (zone2/zone3 only) plays whatever the main zone is playing.
+    The zone must be on."""
+    if source == "same-as-main" and zone == "main":
+        raise ToolError('"same-as-main" only applies to zone2 and zone3.')
+    code = ZONE_CODES[zone]["input"]
+    reply = await call_receiver(f"{code}{SOURCE_CODES[source]}", code, receiver, zone=zone)
     if reply == "N/A":
-        return f"Receiver rejected input {source!r} (is it powered on?)"
-    return f"Input is now {CODE_SOURCES.get(reply, f'SLI{reply}')}"
+        return f"{zone_prefix(zone)}Receiver rejected input {source!r} (is it powered on?)"
+    return f"{zone_prefix(zone)}Input is now {CODE_SOURCES.get(reply, f'{code}{reply}')}"
 
 
 @mcp.tool(title="Set listening mode", annotations=SETTER)
@@ -439,6 +523,50 @@ async def set_listening_mode(mode: ListeningMode, receiver: Receiver = None) -> 
     if reply == "N/A":
         return f"Receiver rejected listening mode {mode!r} (powered off, or not available for this signal?)"
     return f"Listening mode is now {CODE_MODES.get(reply, f'LMD{reply}')}"
+
+
+@mcp.tool(title="Select network service", annotations=SETTER)
+async def select_net_service(service: NetService, receiver: Receiver = None) -> str:
+    """Switch the receiver's network audio to a streaming service, e.g.
+    Pandora. There is one network player per receiver, shared by every zone
+    whose input is "net": set a zone's input to "net" (set_input) to hear it.
+    The service must be offered by this receiver and signed in (usually in the
+    Onkyo Controller app). Call get_now_playing afterwards to see what plays."""
+    code = NET_SERVICE_CODES[service]
+    # NSV gets no reply of its own. The receiver confirms by pushing the title
+    # of its new menu: "NLT" + the service code + 20 status characters + the
+    # service's name, e.g. "NLT0401000000480100FF0400Pandora".
+    reply = await call_receiver(
+        f"NSV{code}0", f"NLT{code}", receiver,  # "0": no account details included
+        no_reply=f"The receiver didn't switch to {service}. It may not offer {service}, "
+                 "or it isn't signed in: check in the Onkyo Controller app.")
+    return f"Network service is now {reply[20:] or service}"
+
+
+@mcp.tool(title="Get now playing", annotations=READ_ONLY)
+async def get_now_playing(receiver: Receiver = None) -> dict:
+    """What the receiver's network player is playing: the service (or the
+    menu it is showing), play state, title, artist, album and position. Every
+    zone whose input is "net" plays this; check get_status to see which zones
+    are on "net"."""
+    host = receiver or HOST
+    menu = await call_receiver("NLTQSTN", "NLT", host)
+    state = await call_receiver("NSTQSTN", "NST", host)
+    title = await call_receiver("NTIQSTN", "NTI", host)
+    artist = await call_receiver("NATQSTN", "NAT", host)
+    album = await call_receiver("NALQSTN", "NAL", host)
+    position = await call_receiver("NTMQSTN", "NTM", host)
+    return {
+        "receiver": host,
+        # NLT: service code, 20 status characters, then the menu's title
+        # ("NET" for the top menu). Prefer our name for a known service.
+        "service": CODE_NET_SERVICES.get(menu[:2], menu[22:] or None),
+        "state": PLAY_STATES.get(state[:1], state or None),
+        "title": title.strip() or None,
+        "artist": artist.strip() or None,
+        "album": album.strip() or None,
+        "position": None if position.startswith("--") else position,  # "00:04:31/00:05:38"
+    }
 
 
 def main() -> None:

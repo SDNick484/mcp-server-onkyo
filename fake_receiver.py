@@ -5,10 +5,12 @@ Simulated Onkyo receiver for developing without hardware.
     ONKYO_HOST=127.0.0.1 python onkyo_mcp.py
 
 It speaks enough eISCP to exercise the server: it remembers PWR/MVL/AMT/SLI/LMD
-state, answers QSTN queries, and sends an unsolicited status message before
+state for the main zone and ZPW/ZVL/ZMT/SLZ for zone 2 (it has no zone 3, like
+a TX-NR6050) and a network player (NST/NTI/NAT/NAL/NTM/NLT, and NSV to pick
+Pandora or TuneIn), answers QSTN queries, and sends an unsolicited status message before
 every reply, the way real receivers do, so the server's filtering gets tested.
-In standby it answers queries but ignores every other command except power,
-with no reply at all, like a real TX-NR7100.
+A zone in standby answers queries but ignores every other command for that
+zone except power, with no reply at all, like a real TX-NR7100.
 
 Tests import it and call `start(port=0)` to get a receiver on a free port.
 """
@@ -18,8 +20,19 @@ import socket
 import struct
 import sys
 
-# Powered on. MVL 0x50 = 80 raw -> displays 40.0 on a 0.5-step model (TX-NR6050/7100)
-DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"}
+# Main zone on; MVL 0x50 = 80 raw -> displays 40.0 on a 0.5-step model.
+# Zone 2 in standby, its input following the main zone (SLZ 80).
+DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00",
+                 "ZPW": "00", "ZVL": "50", "ZMT": "00", "SLZ": "80",
+                 # Network player, showing its top menu ("NET"), nothing playing
+                 "NLT": "F3000000000E0000FFFF00NET", "NST": "Sxx1", "NTI": "", "NAT": "",
+                 "NAL": "", "NTM": "--:--:--/--:--:--"}
+# Services NSV can switch to (the rest get no reply, like a service the
+# receiver doesn't offer), and the menu title each one shows
+NET_SERVICES = {"04": "Pandora", "0E": "TuneIn"}
+# Which power command each setting belongs to
+ZONE_POWER = {"MVL": "PWR", "AMT": "PWR", "SLI": "PWR", "LMD": "PWR",
+              "ZVL": "ZPW", "ZMT": "ZPW", "SLZ": "ZPW"}
 state = dict(DEFAULT_STATE)
 
 
@@ -29,7 +42,7 @@ def reset_state() -> None:
 
 
 def packet(msg: str) -> bytes:
-    data = f"!1{msg}\x1a\r\n".encode("ascii")
+    data = f"!1{msg}\x1a\r\n".encode("utf-8")
     return b"ISCP" + struct.pack(">IIB3x", 16, len(data), 1) + data
 
 
@@ -45,9 +58,14 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
             print(f"<- {cmd}", file=sys.stderr)
 
             writer.write(packet("NLSU0-Now Playing"))  # unsolicited noise
-            if code not in state:
+            if code == "NSV":
+                # No reply of its own: the receiver pushes its new menu title
+                if param[:2] in NET_SERVICES:
+                    state["NLT"] = f"{param[:2]}01000000480100FF0400{NET_SERVICES[param[:2]]}"
+                    writer.write(packet("NLT" + state["NLT"]))
+            elif code not in state:
                 writer.write(packet(f"{code}N/A"))
-            elif state["PWR"] == "00" and code != "PWR" and param != "QSTN":
+            elif code in ZONE_POWER and state[ZONE_POWER[code]] == "00" and param != "QSTN":
                 print("   (in standby: ignored, no reply)", file=sys.stderr)
             else:
                 if param != "QSTN":

@@ -39,3 +39,9 @@ Observed on real hardware (TX-NR7100 is the awkward one; the TX-NR6050 answers i
 - In standby it answers queries but silently ignores setters (no `N/A`).
 - After confirming `PWR01` it pushes a status burst and ignores setters for ~15s.
 - Discovery broadcasts don't reach either receiver on the owner's LAN; unicast does.
+- Zones 2/3 behave unlike the main zone: in standby they accept input changes and
+  answer `N/A` (not silence) to volume/mute. 7100 Zone 2 volume is `N/A` even when on
+  (probably fixed-level output); 7100 Zone 3 answers queries but ignores power-on.
+  The 6050 has no Zone 3 (silence, or `N/A` for SL3).
+- `NSV` (select network service) has no echo: the confirmation is a pushed
+  `NLT<service code>...<name>`. Text fields (titles, stations) are UTF-8.

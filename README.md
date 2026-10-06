@@ -18,20 +18,36 @@ port 60128) directly and needs nothing but the official MCP Python SDK.
 | Tool | What it does |
 | --- | --- |
 | `discover_receivers` | Broadcasts an eISCP discovery query and returns each receiver's IP, model, port and MAC |
-| `get_status` | Power state, master volume (0–100 display scale), mute state, selected input and listening mode |
-| `set_power` | Turn the main zone on, or put it into standby |
-| `set_volume` | Set master volume (0.5 steps on newer models); clamped to a configurable safety cap |
-| `set_mute` | Mute or unmute the main zone |
-| `set_input` | Select the main zone input (`bd-dvd`, `game`, `cbl-sat`, `strm-box`, `pc`, `aux`, `tv`, `phono`, `cd`, `fm`, `am`, `net`, `bluetooth`) |
-| `set_listening_mode` | Set the listening mode (`stereo`, `direct`, `pure-audio`, `all-ch-stereo`, `full-mono`, `theater-dimensional`, `dolby-surround`, `dts-neural-x`, `game-rpg`, `game-action`, `game-rock`, `game-sports`) |
+| `get_status` | A zone's power state, volume (0–100 display scale), mute state and input, plus the listening mode for the main zone |
+| `set_power` | Turn a zone on, or put it into standby |
+| `set_volume` | Set a zone's volume (0.5 steps on newer models); clamped to a configurable safety cap in every zone |
+| `set_mute` | Mute or unmute a zone |
+| `set_input` | Select a zone's input (`bd-dvd`, `game`, `cbl-sat`, `strm-box`, `pc`, `aux`, `tv`, `phono`, `cd`, `fm`, `am`, `net`, `bluetooth`; zones 2/3 also `same-as-main`) |
+| `set_listening_mode` | Set the main zone's listening mode (`stereo`, `direct`, `pure-audio`, `all-ch-stereo`, `full-mono`, `theater-dimensional`, `dolby-surround`, `dts-neural-x`, `game-rpg`, `game-action`, `game-rock`, `game-sports`) |
+| `select_net_service` | Switch the network player to a streaming service (`pandora`, `tunein`, `spotify`, `deezer`, `tidal`, `iheartradio`, `siriusxm`, `music-server`) |
+| `get_now_playing` | The network player's service, play state, title, artist, album and position |
 
 Every tool except `discover_receivers` takes an optional `receiver` argument
 (an IP address from `discover_receivers`) for networks with several receivers.
 Without it, tools talk to `ONKYO_HOST`.
 
-Each tool also declares MCP tool annotations. `discover_receivers` and
-`get_status` are read-only. The `set_*` tools are marked non-destructive and
-idempotent, so clients can tell they're safe to retry.
+**Zones.** `get_status`, `set_power`, `set_volume`, `set_mute` and `set_input`
+take an optional `zone`: `main` (the default, the room the receiver is in),
+`zone2` or `zone3` (speakers in other rooms). Zones are independent: Zone 2 can
+play while the main zone is in standby. Not every receiver has Zone 3, and a
+zone that feeds another amplifier may have fixed volume.
+
+**Network audio.** A receiver has one network player, shared by every zone
+whose input is `net`. To play Pandora in Zone 2: `set_power` and
+`set_input net` with `zone2`, then `select_net_service pandora`. Which
+services work depends on the model, region and firmware, and each must be
+signed in on the receiver (e.g. in the Onkyo Controller app). Only Pandora
+has been verified so far.
+
+Each tool also declares MCP tool annotations. `discover_receivers`,
+`get_status` and `get_now_playing` are read-only. The `set_*` and `select_*`
+tools are marked non-destructive and idempotent, so clients can tell they're
+safe to retry.
 
 ## Requirements
 
@@ -219,7 +235,9 @@ ONKYO_DISCOVERY_ADDR=192.168.1.50 mcp-server-onkyo --discover
 - [x] Multiple receivers from one server (a `receiver` argument on each tool)
 - [x] Input selection
 - [x] Listening modes
-- [ ] Zone 2 / Zone 3
+- [x] Zone 2 / Zone 3
+- [x] Network services: select a service, now playing
+- [ ] Network playback controls (play/pause/next) and browsing stations or playlists
 - [ ] Discovery that works where broadcasts are filtered (query a configured
       list of IPs directly)
 - [ ] Typed (structured) tool output
