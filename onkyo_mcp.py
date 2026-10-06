@@ -30,20 +30,27 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
-HOST = os.environ.get("ONKYO_HOST", "192.168.1.50")
-PORT = int(os.environ.get("ONKYO_PORT", "60128"))
+def setting(name: str, default: str) -> str:
+    """An ONKYO_* environment variable, or `default` if it's unset *or empty*.
+    Empty happens in practice: WSL turns a variable listed in WSLENV but not
+    set on the Windows side into "", which would crash float("")."""
+    return os.environ.get(name) or default
+
+
+HOST = setting("ONKYO_HOST", "192.168.1.50")
+PORT = int(setting("ONKYO_PORT", "60128"))
 # Volume as shown on the receiver's display (0-100). Server-side guardrail.
-MAX_VOLUME = float(os.environ.get("ONKYO_MAX_VOLUME", "75"))
+MAX_VOLUME = float(setting("ONKYO_MAX_VOLUME", "75"))
 # Raw MVL steps per display unit. 2021+ models (TX-NR6050, TX-NR7100) use
 # 0.5 steps, so raw 0x00-0xC8 maps to 0.0-100.0 -> 2. Older models: 1.
-VOLUME_STEPS = int(os.environ.get("ONKYO_VOLUME_STEPS", "2"))
+VOLUME_STEPS = int(setting("ONKYO_VOLUME_STEPS", "2"))
 # Seconds to wait to connect, and then for a reply. Receivers vary a lot: a
 # TX-NR6050 answers in ~0.1s, a TX-NR7100 takes ~1.5s even for a query.
 # Power commands get 3x this (set_power), since the 7100 only confirms power-on
 # after ~4s and standby after ~10s.
-TIMEOUT = float(os.environ.get("ONKYO_TIMEOUT", "5"))
+TIMEOUT = float(setting("ONKYO_TIMEOUT", "5"))
 # Traffic logging (see enable_debug). Also switched on by --debug.
-DEBUG = os.environ.get("ONKYO_DEBUG", "").lower() in ("1", "true", "yes", "on")
+DEBUG = setting("ONKYO_DEBUG", "").lower() in ("1", "true", "yes", "on")
 
 # Everything goes through this logger, which writes to stderr: on the stdio
 # transport, stdout belongs to JSON-RPC. Silent (WARNING) unless debugging.
@@ -159,7 +166,7 @@ def decode_datagram(packet: bytes) -> str:
     return data.decode("utf-8", "replace")[2:].rstrip("\x19\x1a\r\n")
 
 
-DISCOVERY_ADDR = os.environ.get("ONKYO_DISCOVERY_ADDR", "255.255.255.255")
+DISCOVERY_ADDR = setting("ONKYO_DISCOVERY_ADDR", "255.255.255.255")
 
 
 async def discover(timeout: float = 3.0) -> list[dict]:
