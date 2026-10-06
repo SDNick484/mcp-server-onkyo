@@ -26,6 +26,7 @@ import struct
 from typing import Annotated, Literal
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
@@ -36,6 +37,11 @@ MAX_VOLUME = float(os.environ.get("ONKYO_MAX_VOLUME", "50"))
 # Raw MVL steps per display unit. 2021+ models (TX-NR6050, TX-NR7100) use
 # 0.5 steps, so raw 0x00-0xC8 maps to 0.0-100.0 -> 2. Older models: 1.
 VOLUME_STEPS = int(os.environ.get("ONKYO_VOLUME_STEPS", "2"))
+# Seconds to wait to connect, and then for a reply. Receivers vary a lot: a
+# TX-NR6050 answers in ~0.1s, a TX-NR7100 takes ~1.5s even for a query.
+# Power commands get 3x this (set_power), since the 7100 only confirms power-on
+# after ~4s and standby after ~10s.
+TIMEOUT = float(os.environ.get("ONKYO_TIMEOUT", "5"))
 # Traffic logging (see enable_debug). Also switched on by --debug.
 DEBUG = os.environ.get("ONKYO_DEBUG", "").lower() in ("1", "true", "yes", "on")
 
@@ -150,7 +156,7 @@ async def discover(timeout: float = 3.0) -> list[dict]:
                 return
             # Pad with blanks so a reply with missing fields still unpacks
             model, port, region, mac = (msg[3:].split("/") + ["", "", "", ""])[:4]
-            # "0009B0623D93" -> "00:09:B0:62:3D:93"
+            # "0009B0123456" -> "00:09:B0:12:34:56"
             mac = ":".join(mac[i:i + 2] for i in range(0, 12, 2)) if len(mac) >= 12 else mac
             found[addr[0]] = {"host": addr[0], "model": model, "port": int(port or 60128),
                               "region": region, "mac": mac}
@@ -183,30 +189,48 @@ async def read_packet(reader: asyncio.StreamReader) -> str:
     return data.decode("ascii", "replace")[2:].rstrip("\x1a\r\n")
 
 
-async def send(command: str, expect: str | None = None, timeout: float = 2.0,
+async def send(command: str, expect: str | None = None, timeout: float | None = None,
                host: str | None = None) -> str | None:
     """Send one command to `host` (default: ONKYO_HOST). If `expect` is a
     3-char prefix (e.g. "MVL"), wait for the matching reply. The receiver also
-    pushes unsolicited status messages, so we skip anything that doesn't match."""
+    pushes unsolicited status messages, so we skip anything that doesn't match.
+
+    For a setter ("AMT01", as opposed to a query, "AMTQSTN"), the reply must
+    echo the value we sent, or be "N/A". A same-prefix message with another
+    value is a status push, not our answer: right after power-on a TX-NR7100
+    pushes "AMT00" while still ignoring commands, which would otherwise read as
+    "AMT01 failed".
+
+    Raises ConnectionError (an OSError) if it can't connect, and TimeoutError
+    if it connected but the reply never came (e.g. a receiver in standby)."""
     # One short-lived connection per command: simpler than keeping a socket
     # open, and it survives the receiver dropping idle connections.
     host = host or HOST
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(host, PORT), timeout
-    )
+    timeout = timeout or TIMEOUT
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, PORT), timeout
+        )
+    except TimeoutError:
+        # Re-raised as a different type, so callers can tell "couldn't
+        # connect" apart from "connected, but no reply" (TimeoutError below).
+        raise ConnectionError(f"timed out connecting to {host}:{PORT}") from None
     try:
         log.debug("eISCP -> %s %s", host, command)
         writer.write(build_packet(command))
         await writer.drain()
         if expect is None:
             return None
+        sent_value = command[len(expect):]  # "AMT01" -> "01", "AMTQSTN" -> "QSTN"
+        is_setter = command.startswith(expect) and sent_value != "QSTN"
 
         async def wait_for_match() -> str:
             while True:
                 msg = await read_packet(reader)
-                if msg.startswith(expect):
+                value = msg[len(expect):]  # "MVL50" -> "50"
+                if msg.startswith(expect) and (not is_setter or value in (sent_value, "N/A")):
                     log.debug("eISCP <- %s %s", host, msg)
-                    return msg[len(expect):]  # "MVL50" -> "50"
+                    return value
                 log.debug("eISCP <- %s %s (unsolicited, skipped)", host, msg)
 
         # One timeout around the whole loop, so a chatty receiver that never
@@ -306,17 +330,49 @@ Receiver = Annotated[str | None, Field(
 )]
 
 
+async def call_receiver(command: str, expect: str, receiver: str | None,
+                        timeout: float | None = None) -> str:
+    """send() for tools: turns network failures into a ToolError whose message
+    tells the model what went wrong.
+
+    Why ToolError: when a tool raises any other exception, the SDK treats it as
+    a crash and keeps the details on the server. The model only sees
+    "Error executing tool set_volume", so it can't tell the user anything
+    useful. A ToolError is a failure we raised on purpose, and its message is
+    sent to the model as an isError result."""
+    host = receiver or HOST
+    try:
+        return await send(command, expect=expect, host=host, timeout=timeout)
+    except TimeoutError as exc:
+        # Connected, but no reply. Receivers in standby still answer queries,
+        # but some (TX-NR7100) silently ignore everything else, so ask which.
+        if not command.startswith("PWR"):
+            try:
+                standby = await send("PWRQSTN", expect="PWR", host=host) == "00"
+            except OSError:  # includes TimeoutError
+                standby = False
+            if standby:
+                raise ToolError(f"The receiver at {host} is in standby. "
+                                "Turn it on with set_power first.") from exc
+        raise ToolError(f"The receiver at {host} didn't reply in time. If it was just "
+                        "turned on, it may still be starting up (some models take about "
+                        "15 seconds): wait a few seconds and try again.") from exc
+    except OSError as exc:
+        raise ToolError(f"Can't connect to a receiver at {host} ({exc}). Check the "
+                        "IP address, and that the receiver is on the network.") from exc
+
+
 @mcp.tool(title="Get receiver status", annotations=READ_ONLY)
 async def get_status(receiver: Receiver = None) -> dict:
     """Get a receiver's current power state, master volume (0-100), mute
     state, selected input and listening mode. If there are several receivers
     on the network, call discover_receivers first and pass the one you want."""
     host = receiver or HOST
-    power = await send("PWRQSTN", expect="PWR", host=host)
-    volume = await send("MVLQSTN", expect="MVL", host=host)
-    mute = await send("AMTQSTN", expect="AMT", host=host)
-    source = await send("SLIQSTN", expect="SLI", host=host)
-    mode = await send("LMDQSTN", expect="LMD", host=host)
+    power = await call_receiver("PWRQSTN", "PWR", host)
+    volume = await call_receiver("MVLQSTN", "MVL", host)
+    mute = await call_receiver("AMTQSTN", "AMT", host)
+    source = await call_receiver("SLIQSTN", "SLI", host)
+    mode = await call_receiver("LMDQSTN", "LMD", host)
     return {
         "receiver": host,  # so the model can tell answers from different receivers apart
         "power": "on" if power == "01" else "standby",
@@ -330,9 +386,16 @@ async def get_status(receiver: Receiver = None) -> dict:
 
 @mcp.tool(title="Set power", annotations=SETTER)
 async def set_power(on: bool, receiver: Receiver = None) -> str:
-    """Turn the main zone on, or put it into standby."""
-    reply = await send("PWR01" if on else "PWR00", expect="PWR", host=receiver)
-    return f"Power is now {'on' if reply == '01' else 'standby'}"
+    """Turn the main zone on, or put it into standby. After power-on, some
+    receivers need about 15 seconds before they accept other commands."""
+    # Power changes are slow to confirm (a TX-NR7100 takes ~10s to reach standby)
+    reply = await call_receiver("PWR01" if on else "PWR00", "PWR", receiver,
+                                timeout=3 * TIMEOUT)
+    if reply == "01":
+        # The TX-NR7100 confirms power-on, then ignores commands for ~15s
+        return ("Power is now on. Some receivers need about 15 seconds to start up "
+                "before they accept other commands.")
+    return "Power is now standby"
 
 
 @mcp.tool(title="Set volume", annotations=SETTER)
@@ -340,7 +403,7 @@ async def set_volume(level: float, receiver: Receiver = None) -> str:
     """Set master volume on the receiver's 0-100 display scale (0.5 steps on
     newer models). Values above the configured safety cap are clamped."""
     clamped = max(0.0, min(level, MAX_VOLUME))
-    reply = await send(f"MVL{volume_to_raw(clamped)}", expect="MVL", host=receiver)
+    reply = await call_receiver(f"MVL{volume_to_raw(clamped)}", "MVL", receiver)
     if reply == "N/A":
         return "Receiver rejected the volume change (is it powered on?)"
     note = f" (requested {level}, capped at {MAX_VOLUME})" if clamped != level else ""
@@ -350,7 +413,7 @@ async def set_volume(level: float, receiver: Receiver = None) -> str:
 @mcp.tool(title="Set mute", annotations=SETTER)
 async def set_mute(muted: bool, receiver: Receiver = None) -> str:
     """Mute or unmute the main zone."""
-    reply = await send("AMT01" if muted else "AMT00", expect="AMT", host=receiver)
+    reply = await call_receiver("AMT01" if muted else "AMT00", "AMT", receiver)
     return "Muted" if reply == "01" else "Unmuted"
 
 
@@ -359,7 +422,7 @@ async def set_input(source: Source, receiver: Receiver = None) -> str:
     """Select the main zone's input source. Names match the receiver's
     front-panel labels (e.g. "bd-dvd" for the BD/DVD input, "net" for
     network streaming). The receiver must be on."""
-    reply = await send(f"SLI{SOURCE_CODES[source]}", expect="SLI", host=receiver)
+    reply = await call_receiver(f"SLI{SOURCE_CODES[source]}", "SLI", receiver)
     if reply == "N/A":
         return f"Receiver rejected input {source!r} (is it powered on?)"
     return f"Input is now {CODE_SOURCES.get(reply, f'SLI{reply}')}"
@@ -372,7 +435,7 @@ async def set_listening_mode(mode: ListeningMode, receiver: Receiver = None) -> 
     "dts-neural-x" upmix to all speakers and play Dolby Atmos / DTS:X content
     natively. The receiver must be on, and may reject modes that don't suit
     the current input signal."""
-    reply = await send(f"LMD{MODE_CODES[mode]}", expect="LMD", host=receiver)
+    reply = await call_receiver(f"LMD{MODE_CODES[mode]}", "LMD", receiver)
     if reply == "N/A":
         return f"Receiver rejected listening mode {mode!r} (powered off, or not available for this signal?)"
     return f"Listening mode is now {CODE_MODES.get(reply, f'LMD{reply}')}"

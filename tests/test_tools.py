@@ -52,7 +52,7 @@ async def test_tool_annotations(client):
 
 async def test_get_status(client):
     result = await client.call_tool("get_status", {})
-    assert json.loads(text(result)) == {"receiver": "127.0.0.1", "power": "standby",
+    assert json.loads(text(result)) == {"receiver": "127.0.0.1", "power": "on",
                                         "volume": 40.0, "muted": False,
                                         "input": "bd-dvd", "listening_mode": "stereo"}
 
@@ -84,7 +84,7 @@ async def test_get_status_picks_receiver(client, second_receiver):
     other = json.loads(text(await client.call_tool("get_status", {"receiver": "::1"})))
     default = json.loads(text(await client.call_tool("get_status", {})))
     assert (other["receiver"], other["power"], other["input"]) == ("::1", "on", "game")
-    assert (default["receiver"], default["power"], default["input"]) == ("127.0.0.1", "standby", "bd-dvd")
+    assert (default["receiver"], default["power"], default["input"]) == ("127.0.0.1", "on", "bd-dvd")
 
 
 @pytest.mark.parametrize("tool, args, code, value", [
@@ -110,7 +110,9 @@ async def test_get_status_unknown_input_shown_raw(client, receiver):
 
 
 async def test_set_power(client, receiver):
-    assert text(await client.call_tool("set_power", {"on": True})) == "Power is now on"
+    assert text(await client.call_tool("set_power", {"on": False})) == "Power is now standby"
+    assert receiver["PWR"] == "00"
+    assert text(await client.call_tool("set_power", {"on": True})).startswith("Power is now on.")
     assert receiver["PWR"] == "01"
 
 
@@ -131,8 +133,8 @@ async def test_set_volume_capped(client, receiver):
 
 
 async def test_set_volume_rejected_by_receiver(client, receiver):
-    # Real receivers answer "MVLN/A" when they can't take the command (e.g. in
-    # standby). The fake does the same for any command it doesn't know.
+    # Some receivers answer "MVLN/A" when they can't take a command. The fake
+    # does the same for any command it doesn't know.
     del receiver["MVL"]
     result = await client.call_tool("set_volume", {"level": 20})
     assert not result.is_error
@@ -189,3 +191,27 @@ async def test_no_traffic_logged_by_default(client, receiver, caplog):
     caplog.set_level(logging.INFO)  # anything below WARNING stays silent unless debugging
     await client.call_tool("set_mute", {"muted": True})
     assert not [r for r in caplog.records if r.name == "onkyo_mcp"]
+
+
+async def test_setter_in_standby_says_so(client, receiver):
+    # Like a TX-NR7100, the fake ignores setters in standby without replying.
+    # The model must hear why, not just "Error executing tool set_volume".
+    receiver["PWR"] = "00"
+    result = await client.call_tool("set_volume", {"level": 20})
+    assert result.is_error
+    assert text(result) == ("Error executing tool set_volume: The receiver at 127.0.0.1 "
+                            "is in standby. Turn it on with set_power first.")
+    assert receiver["MVL"] == "50"  # unchanged
+
+
+async def test_status_works_in_standby(client, receiver):
+    receiver["PWR"] = "00"  # queries are still answered in standby
+    result = await client.call_tool("get_status", {})
+    assert json.loads(text(result))["power"] == "standby"
+
+
+async def test_unreachable_receiver_says_so(client, receiver, monkeypatch):
+    monkeypatch.setattr(onkyo_mcp, "PORT", fake_receiver.free_port())  # nothing listening
+    result = await client.call_tool("set_mute", {"muted": True})
+    assert result.is_error
+    assert "Can't connect to a receiver at 127.0.0.1" in text(result)

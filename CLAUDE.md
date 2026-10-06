@@ -31,4 +31,11 @@ Command tables: https://github.com/miracle2k/onkyo-eiscp (eiscp-commands.yaml).
 Target hardware: TX-NR7100 and TX-NR6050 (2021+). Volume (MVL) is hex in
 0.5-dB-style steps: raw 0x00-0xC8 = display 0.0-100.0 (`ONKYO_VOLUME_STEPS=2`).
 Receivers need Network Standby enabled to power on over the network.
-Receivers push unsolicited status messages; match replies by 3-char command prefix.
+Receivers push unsolicited status messages; match replies by 3-char command prefix
+(and, for setters, by the echoed value: a same-prefix push is not the reply).
+
+Observed on real hardware (TX-NR7100 is the awkward one; the TX-NR6050 answers in ~0.1s):
+- Slow: ~1.5s for a query, ~4s to confirm power-on, up to ~10s to confirm standby.
+- In standby it answers queries but silently ignores setters (no `N/A`).
+- After confirming `PWR01` it pushes a status burst and ignores setters for ~15s.
+- Discovery broadcasts don't reach either receiver on the owner's LAN; unicast does.

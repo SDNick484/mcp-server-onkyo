@@ -7,16 +7,19 @@ Simulated Onkyo receiver for developing without hardware.
 It speaks enough eISCP to exercise the server: it remembers PWR/MVL/AMT/SLI/LMD
 state, answers QSTN queries, and sends an unsolicited status message before
 every reply, the way real receivers do, so the server's filtering gets tested.
+In standby it answers queries but ignores every other command except power,
+with no reply at all, like a real TX-NR7100.
 
 Tests import it and call `start(port=0)` to get a receiver on a free port.
 """
 
 import asyncio
+import socket
 import struct
 import sys
 
-# MVL 0x50 = 80 raw -> displays 40.0 on a 0.5-step model (TX-NR6050/7100)
-DEFAULT_STATE = {"PWR": "00", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"}
+# Powered on. MVL 0x50 = 80 raw -> displays 40.0 on a 0.5-step model (TX-NR6050/7100)
+DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"}
 state = dict(DEFAULT_STATE)
 
 
@@ -44,6 +47,8 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
             writer.write(packet("NLSU0-Now Playing"))  # unsolicited noise
             if code not in state:
                 writer.write(packet(f"{code}N/A"))
+            elif state["PWR"] == "00" and code != "PWR" and param != "QSTN":
+                print("   (in standby: ignored, no reply)", file=sys.stderr)
             else:
                 if param != "QSTN":
                     state[code] = param
@@ -65,7 +70,14 @@ class Discovery(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr: tuple) -> None:
         if b"ECNQSTN" in data:
             print(f"<- discovery from {addr[0]}", file=sys.stderr)
-            self.transport.sendto(packet("ECNTX-NR7100/60128/DX/0009B0623D93"), addr)
+            self.transport.sendto(packet("ECNTX-NR7100/60128/DX/0009B0123456"), addr)
+
+
+def free_port() -> int:
+    """A port with nothing listening on it (for testing connection failures)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 async def start(host: str = "127.0.0.1", port: int = 60128, state: dict = state):

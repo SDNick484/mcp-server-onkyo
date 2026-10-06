@@ -23,9 +23,9 @@ def test_build_packet_discovery_unit():
 
 
 def test_decode_datagram_strips_prefix_and_terminators():
-    data = b"!1ECNTX-NR7100/60128/DX/0009B0623D93\x1a\r\n"
+    data = b"!1ECNTX-NR7100/60128/DX/0009B0123456\x1a\r\n"
     pkt = b"ISCP" + struct.pack(">IIB3x", 16, len(data), 1) + data
-    assert decode_datagram(pkt) == "ECNTX-NR7100/60128/DX/0009B0623D93"
+    assert decode_datagram(pkt) == "ECNTX-NR7100/60128/DX/0009B0123456"
 
 
 def test_decode_datagram_rejects_bad_magic():

@@ -61,8 +61,12 @@ mcp-server-onkyo --discover
 ```
 
 ```
-192.168.1.50     TX-NR7100    00:09:B0:62:3D:93  port 60128
+192.168.1.50     TX-NR7100    00:09:B0:12:34:56  port 60128
 ```
+
+Discovery relies on UDP broadcast, which some networks silently drop. If it
+finds nothing, see [When discovery finds nothing](#when-discovery-finds-nothing).
+You don't need discovery: setting `ONKYO_HOST` to the receiver's IP is enough.
 
 ## Configuration
 
@@ -74,6 +78,7 @@ All settings are environment variables:
 | `ONKYO_PORT` | `60128` | eISCP port |
 | `ONKYO_MAX_VOLUME` | `50` | Safety cap on the display scale. Enforced by the server, not left to the model |
 | `ONKYO_VOLUME_STEPS` | `2` | Raw volume steps per display unit: `2` for newer models with 0.5 steps (TX-NR6050, TX-NR7100), `1` for older ones |
+| `ONKYO_TIMEOUT` | `5` | Seconds to wait for a receiver to reply (power commands get 3×). Some models are slow: a TX-NR7100 takes ~1.5 s to answer a query and ~10 s to confirm standby |
 | `ONKYO_DISCOVERY_ADDR` | `255.255.255.255` | Where the discovery query is sent |
 | `ONKYO_DEBUG` | off | `1` logs all MCP and eISCP traffic to stderr (same as `--debug`). See [Debugging](#debugging) |
 
@@ -104,7 +109,8 @@ Add this to `claude_desktop_config.json`:
 
 No receiver needed: `fake_receiver.py` simulates one on `127.0.0.1:60128`. It
 answers discovery, remembers power/volume/mute state, and sends unsolicited
-status messages the way real receivers do.
+status messages the way real receivers do. Like a TX-NR7100, it ignores
+everything but power and queries while in standby.
 
 ```sh
 python fake_receiver.py &
@@ -159,21 +165,63 @@ stderr in its UI.
 
 ## Troubleshooting
 
-- **`--discover` finds nothing:** discovery is a UDP broadcast, so it only
-  reaches receivers on the same subnet. On **WSL2**, the default NAT networking
-  keeps broadcasts off your LAN. Set `networkingMode=mirrored` in
-  `%UserProfile%\.wslconfig` and run `wsl --shutdown`, or run discovery from
-  Windows Python. Firewalls must allow the receivers' UDP replies.
+### When discovery finds nothing
+
+Discovery broadcasts one UDP query (`!xECNQSTN`) to port 60128, and every
+receiver that hears it replies with its model and MAC. A broadcast is the
+weakest link here: it only reaches the local subnet, and switches, access
+points and mesh systems are often set to filter it. When that happens,
+`--discover` and the `discover_receivers` tool return nothing, even though the
+receivers are online and fully controllable.
+
+**Narrow it down.** `--debug` shows whether any reply comes back at all:
+
+```sh
+mcp-server-onkyo --discover --debug
+```
+
+If you know (or suspect) a receiver's IP, send the same query straight to it.
+A reply means the receiver and the path back to you are fine, and only the
+broadcast is being dropped:
+
+```sh
+ONKYO_DISCOVERY_ADDR=192.168.1.50 mcp-server-onkyo --discover
+```
+
+**Finding the IP without discovery:**
+- Your router's list of connected clients / DHCP leases.
+- The receiver's own Setup → Network screen.
+- Your computer's ARP table. Onkyo hardware uses the MAC prefix `00:09:B0`.
+  This only lists devices your computer has talked to recently:
+  `arp -a | findstr /i 00-09-b0` (Windows) or `ip neigh | grep -i 00:09:b0` (Linux).
+
+**Workarounds:**
+- Set `ONKYO_HOST` to the receiver's IP and skip discovery. Reach any other
+  receivers through the tools' `receiver` argument. Give each receiver a DHCP
+  reservation in your router so its IP doesn't change.
+- Try the subnet's own broadcast address instead of `255.255.255.255`, e.g.
+  `ONKYO_DISCOVERY_ADDR=192.168.1.255` for 192.168.1.0/24. This helps when a
+  computer with several network adapters sends the broadcast out of the wrong one.
+- Check your network gear for broadcast/multicast filtering, client (AP)
+  isolation, or VLANs separating the computer from the receivers.
+- **WSL2:** the default NAT networking keeps broadcasts off your LAN. Set
+  `networkingMode=mirrored` in `%UserProfile%\.wslconfig` and run
+  `wsl --shutdown`. Firewalls must also allow the receivers' UDP replies.
+
+### Other problems
+
 - **Power-on does nothing:** enable Network Standby on the receiver.
 - **Volume numbers don't match the front panel:** adjust `ONKYO_VOLUME_STEPS`.
 
 ## Roadmap
 
-- [ ] Validate on TX-NR7100 / TX-NR6050 hardware
+- [x] Validate on TX-NR7100 / TX-NR6050 hardware
 - [x] Multiple receivers from one server (a `receiver` argument on each tool)
 - [x] Input selection
 - [x] Listening modes
 - [ ] Zone 2 / Zone 3
+- [ ] Discovery that works where broadcasts are filtered (query a configured
+      list of IPs directly)
 - [ ] Typed (structured) tool output
 - [ ] Receiver state as MCP resources
 - [ ] Persistent connection with push updates
