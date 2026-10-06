@@ -29,7 +29,8 @@ async def test_tools_list(client):
     tools = {t.name: t for t in (await client.list_tools()).tools}
     assert set(tools) == {"discover_receivers", "get_status", "set_power",
                           "set_volume", "set_mute", "set_input", "set_listening_mode",
-                          "select_net_service", "get_now_playing"}
+                          "select_net_service", "get_now_playing",
+                          "list_stations", "play_station", "control_playback"}
     # Literal["bd-dvd", ...] becomes a JSON Schema enum the model must pick from
     source = tools["set_input"].input_schema["properties"]["source"]
     assert set(source["enum"]) == set(onkyo_mcp.SOURCE_CODES)
@@ -308,7 +309,8 @@ async def test_net_service_names_match_code_table(client):
 
 async def test_now_playing_idle(client, receiver):
     result = json.loads(text(await client.call_tool("get_now_playing", {})))
-    assert result == {"receiver": "127.0.0.1", "service": None, "menu": "NET", "state": "stopped",
+    assert result == {"receiver": "127.0.0.1", "service": None, "station": None, "menu": "NET",
+                      "state": "stopped",
                       "title": None, "artist": None, "album": None, "position": None}
 
 
@@ -326,7 +328,8 @@ async def test_now_playing_track_with_accents(client, receiver):
                     NTM="00:01:02/00:04:00")
     await client.call_tool("select_net_service", {"service": "pandora"})
     result = json.loads(text(await client.call_tool("get_now_playing", {})))
-    assert result == {"receiver": "127.0.0.1", "service": "pandora", "menu": "Pandora", "state": "playing",
+    assert result == {"receiver": "127.0.0.1", "service": "pandora", "station": None,
+                      "menu": "Pandora", "state": "playing",
                       "title": "Déjà Vu", "artist": "Beyoncé", "album": "B'Day",
                       "position": "00:01:02/00:04:00"}
 
@@ -335,3 +338,67 @@ async def test_mute_rejected_is_not_reported_as_unmuted(client, receiver):
     del receiver["AMT"]  # the fake answers N/A, as a TX-NR7100 zone 3 in standby did
     result = await client.call_tool("set_mute", {"muted": True})
     assert "rejected" in text(result)
+
+
+
+async def test_list_stations_only_music(client, receiver):
+    result = await client.call_tool("list_stations", {"service": "pandora"})
+    # No "Create new station" or "Sign Out"; the duplicate listed once
+    assert result.structured_content["result"] == ["Shuffle", "Pearl Jam Radio", "Beyoncé Radio"]
+
+
+async def test_play_station_by_partial_name(client, receiver):
+    result = await client.call_tool("play_station", {"station": "pearl jam"})
+    assert text(result) == "Playing Pearl Jam Radio on pandora"
+    assert fake_receiver.selected == [3]  # the first Pearl Jam Radio
+    playing = json.loads(text(await client.call_tool("get_now_playing", {})))
+    assert (playing["station"], playing["state"], playing["title"]) == ("Pearl Jam Radio", "playing", "Black")
+
+
+async def test_play_station_never_selects_account_items(client, receiver):
+    for name in ("Sign Out", "Create new station"):
+        result = await client.call_tool("play_station", {"station": name})
+        assert result.is_error and "no station matching" in text(result)
+    assert fake_receiver.selected == []
+
+
+async def test_play_station_ambiguous(client, receiver):
+    result = await client.call_tool("play_station", {"station": "radio"})
+    assert result.is_error
+    assert "Pearl Jam Radio, Beyoncé Radio" in text(result)
+    assert fake_receiver.selected == []
+
+
+async def test_control_playback(client, receiver):
+    await client.call_tool("play_station", {"station": "Beyoncé Radio"})
+    assert text(await client.call_tool("control_playback", {"action": "pause"})) == "Paused"
+    assert receiver["NST"].startswith("p")
+    assert text(await client.call_tool("control_playback", {"action": "play"})) == "Playing"
+    assert text(await client.call_tool("control_playback", {"action": "next"})) == \
+        "Now playing Interstate Love Song"
+
+
+async def test_previous_refused_says_so(client, receiver):
+    await client.call_tool("play_station", {"station": "Shuffle"})
+    result = await client.call_tool("control_playback", {"action": "previous"})
+    assert result.is_error and "didn't change" in text(result)
+
+
+async def test_play_with_nothing_selected_says_so(client, receiver):
+    result = await client.call_tool("control_playback", {"action": "play"})
+    assert result.is_error and "play_station" in text(result)
+
+
+async def test_playback_annotations(client):
+    tools = {t.name: t for t in (await client.list_tools()).tools}
+    assert tools["control_playback"].annotations.idempotent_hint is False  # "next" twice != once
+
+
+
+async def test_playing_station_still_listed_and_playable(client, receiver):
+    # The receiver marks the playing station icontype "0" instead of "M"
+    await client.call_tool("play_station", {"station": "Beyoncé Radio"})
+    result = await client.call_tool("list_stations", {})
+    assert result.structured_content["result"] == ["Shuffle", "Pearl Jam Radio", "Beyoncé Radio"]
+    assert text(await client.call_tool("play_station", {"station": "beyoncé"})) == \
+        "Playing Beyoncé Radio on pandora"

@@ -6,8 +6,8 @@ Simulated Onkyo receiver for developing without hardware.
 
 It speaks enough eISCP to exercise the server: it remembers PWR/MVL/AMT/SLI/LMD
 state for the main zone and ZPW/ZVL/ZMT/SLZ for zone 2 (it has no zone 3, like
-a TX-NR6050) and a network player (NST/NTI/NAT/NAL/NTM/NLT, and NSV to pick
-Pandora or Amazon Music), answers QSTN queries, and sends an unsolicited status message before
+a TX-NR6050) and a network player (NST/NTI/NAT/NAL/NTM/NLT/NDN, NSV to pick
+Pandora or Amazon Music, NLA/NLSI for Pandora's station list, NTC playback), answers QSTN queries, and sends an unsolicited status message before
 every reply, the way real receivers do, so the server's filtering gets tested.
 A zone in standby answers queries but ignores every other command for that
 zone except power, with no reply at all, like a real TX-NR7100.
@@ -26,7 +26,7 @@ DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"
                  "ZPW": "00", "ZVL": "50", "ZMT": "00", "SLZ": "80",
                  # Network player, showing its top menu ("NET"), nothing playing
                  "NLT": "F3000000000E0000FFFF00NET", "NMS": "xxxxxxxF3", "NST": "Sxx1", "NTI": "", "NAT": "",
-                 "NAL": "", "NTM": "--:--:--/--:--:--",
+                 "NAL": "", "NTM": "--:--:--/--:--:--", "NDN": "",
                  # Its self-description (trimmed): a TX-NR6050, Zone 2 but no Zone 3
                  "NRI": '<?xml version="1.0" encoding="utf-8"?><response status="ok"><device id="TX-NR6050">'
                         '<model>TX-NR6050</model><zonelist count="4">'
@@ -38,6 +38,12 @@ DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"
 # Services NSV can switch to (the rest get no reply, like a service the
 # receiver doesn't offer), and the menu title each one shows
 NET_SERVICES = {"04": "Pandora", "1C": "Amazon Music"}
+# Pandora's top menu, as (icontype, title): M = music, the rest must never be
+# played. "Pearl Jam Radio" appears twice, as it does on a real account.
+STATIONS = [("G", "Create new station"), ("M", "Shuffle"), ("M", "Pearl Jam Radio"),
+            ("M", "Beyoncé Radio"), ("M", "Pearl Jam Radio"), ("-", "Sign Out")]
+TRACKS = ["Black", "Interstate Love Song", "Garden"]  # what "next" steps through
+selected: list[int] = []  # NLSI positions received, for tests to check
 # Which power command each setting belongs to
 ZONE_POWER = {"MVL": "PWR", "AMT": "PWR", "SLI": "PWR", "LMD": "PWR",
               "ZVL": "ZPW", "ZMT": "ZPW", "SLZ": "ZPW"}
@@ -47,6 +53,7 @@ state = dict(DEFAULT_STATE)
 def reset_state() -> None:
     state.clear()
     state.update(DEFAULT_STATE)
+    selected.clear()
 
 
 def packet(msg: str) -> bytes:
@@ -69,9 +76,32 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
             if code == "NSV":
                 # No reply of its own: the receiver pushes its new menu title
                 if param[:2] in NET_SERVICES:
-                    state["NLT"] = f"{param[:2]}01000000480100FF0400{NET_SERVICES[param[:2]]}"
+                    count = len(STATIONS) if param[:2] == "04" else 0
+                    state["NLT"] = f"{param[:2]}010000{count:04X}0100FF0400{NET_SERVICES[param[:2]]}"
                     state["NMS"] = f"MxxxxS1{param[:2]}"  # ends with the service icon
                     writer.write(packet("NLT" + state["NLT"]))
+            elif code == "NLA" and param.startswith("L"):
+                # The whole list as XML: "X" + sequence number + "S" (success)
+                # The station playing now is marked icontype "0", not "M"
+                items = "".join(f'<item icontype="{"0" if i in selected[-1:] else t}" '
+                                f'title="{title}" selectable="1" />'
+                                for i, (t, title) in enumerate(STATIONS, start=1))
+                xml = (f'<?xml version="1.0" encoding="utf-8"?><response status="ok">'
+                       f'<items offset="0" totalitems="{len(STATIONS)}" >{items}</items></response>')
+                writer.write(packet(f"NLAX{param[1:5]}S000{xml}"))
+            elif code == "NLS" and param.startswith("I"):
+                position = int(param[1:])
+                selected.append(position)
+                state.update(NDN=STATIONS[position - 1][1], NTI=TRACKS[0], NST="Pxx1")
+                writer.write(packet("NSTSxx1") + packet("NST" + state["NST"]))
+            elif code == "NTC":
+                if param == "TRUP":
+                    state["NTI"] = TRACKS[(TRACKS.index(state["NTI"]) + 1) % len(TRACKS)]
+                    writer.write(packet("NTI" + state["NTI"]))
+                elif param in ("PLAY", "PAUSE", "STOP") and state["NDN"]:
+                    state["NST"] = {"PLAY": "P", "PAUSE": "p", "STOP": "S"}[param] + "xx1"
+                    writer.write(packet("NST" + state["NST"]))
+                # nothing selected, or TRDN (Pandora can't go back): no reply
             elif code not in state:
                 writer.write(packet(f"{code}N/A"))
             elif code in ZONE_POWER and state[ZONE_POWER[code]] == "00" and param != "QSTN":

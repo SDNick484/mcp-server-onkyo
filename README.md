@@ -25,7 +25,10 @@ port 60128) directly and needs nothing but the official MCP Python SDK.
 | `set_input` | Select a zone's input (`bd-dvd`, `game`, `cbl-sat`, `strm-box`, `pc`, `aux`, `tv`, `phono`, `cd`, `fm`, `am`, `net`, `bluetooth`; zones 2/3 also `same-as-main`) |
 | `set_listening_mode` | Set the main zone's listening mode (`stereo`, `direct`, `pure-audio`, `all-ch-stereo`, `full-mono`, `theater-dimensional`, `dolby-surround`, `dts-neural-x`, `game-rpg`, `game-action`, `game-rock`, `game-sports`) |
 | `select_net_service` | Switch the network player to a streaming service (`pandora`, `spotify`, `deezer`, `tidal`, `amazon-music`, `airplay`, `tunein`) |
-| `get_now_playing` | The network player's service, play state, title, artist, album and position |
+| `get_now_playing` | The network player's service, station, play state, title, artist, album and position |
+| `list_stations` | What a service's top menu can play, e.g. your Pandora stations |
+| `play_station` | Start a station by name (part of the name is enough) |
+| `control_playback` | Play, pause, stop, next or previous track on the network player |
 
 Every tool except `discover_receivers` takes an optional `receiver` argument
 (an IP address from `discover_receivers`) for networks with several receivers.
@@ -55,7 +58,9 @@ a 5.2.4 layout), and then that zone can't be used, or has no volume control.
 
 **Network audio.** A receiver has one network player, shared by every zone
 whose input is `net`. To play Pandora in Zone 2: `set_power` and
-`set_input net` with `zone2`, then `select_net_service pandora`. Which
+`set_input net` with `zone2`, then `play_station` with a station name from
+`list_stations` (e.g. "Pearl Jam Radio"). Only music items can be played, so
+menu entries like "Sign Out" are never selected. Which
 services work depends on the model, region and firmware, and each must be
 signed in on the receiver (e.g. in the Onkyo Controller app). The list
 matches what the Onkyo Controller app offers for the TX-NR6050/7100, plus
@@ -64,9 +69,10 @@ Pandora has been verified so far. AirPlay and Spotify are normally started
 from a phone (AirPlay, Spotify Connect).
 
 Each tool also declares MCP tool annotations. `discover_receivers`,
-`get_status` and `get_now_playing` are read-only. The `set_*` and `select_*`
-tools are marked non-destructive and idempotent, so clients can tell they're
-safe to retry.
+`get_status` and `get_now_playing` are read-only. The `set_*`, `select_*`,
+`list_stations` and `play_station` tools are marked non-destructive and
+idempotent, so clients can tell they're safe to retry. `control_playback` is
+not idempotent: "next" twice skips two tracks.
 
 ## Requirements
 
@@ -256,7 +262,8 @@ ONKYO_DISCOVERY_ADDR=192.168.1.50 mcp-server-onkyo --discover
 - [x] Listening modes
 - [x] Zone 2 / Zone 3
 - [x] Network services: select a service, now playing
-- [ ] Network playback controls (play/pause/next) and browsing stations or playlists
+- [x] Network playback: stations by name, play/pause/stop/next/previous
+- [ ] Browsing deeper menus (playlists, albums, TuneIn categories)
 - [ ] Discovery that works where broadcasts are filtered (query a configured
       list of IPs directly)
 - [ ] Typed (structured) tool output

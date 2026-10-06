@@ -383,6 +383,11 @@ READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 SETTER = ToolAnnotations(read_only_hint=False, destructive_hint=False,
                          idempotent_hint=True, open_world_hint=False)
 
+# Playback controls change state but aren't idempotent: "next" twice skips
+# two tracks.
+PLAYBACK = ToolAnnotations(read_only_hint=False, destructive_hint=False,
+                           idempotent_hint=False, open_world_hint=False)
+
 
 # Discovery reads nothing but replies, so it is read-only. It is open-world,
 # though: it broadcasts to the whole LAN and lists whatever answers.
@@ -402,9 +407,9 @@ Receiver = Annotated[str | None, Field(
 )]
 
 
-async def call_receiver(command: str, expect: str, receiver: str | None,
+async def call_receiver(command: str, expect: str | None, receiver: str | None,
                         timeout: float | None = None, zone: Zone = "main",
-                        no_reply: str | None = None) -> str:
+                        no_reply: str | None = None) -> str | None:
     """send() for tools: turns network failures into a ToolError whose message
     tells the model what went wrong.
 
@@ -659,9 +664,11 @@ async def get_now_playing(receiver: Receiver = None) -> dict:
     artist = await call_receiver("NATQSTN", "NAT", host)
     album = await call_receiver("NALQSTN", "NAL", host)
     position = await call_receiver("NTMQSTN", "NTM", host)
+    station = await call_receiver("NDNQSTN", "NDN", host)  # e.g. "Pearl Jam Radio"
     return {
         "receiver": host,
         "service": CODE_NET_SERVICES.get(menu_status[-2:]),  # None at the top menu ("F3")
+        "station": None if station in ("", "N/A") else station.strip() or None,
         # NLT: service code, 20 status characters, then the menu's title
         "menu": menu[22:] or None,
         "state": PLAY_STATES.get(state[:1], state or None),
@@ -670,6 +677,106 @@ async def get_now_playing(receiver: Receiver = None) -> dict:
         "album": album.strip() or None,
         "position": None if position.startswith("--") else position,  # "00:04:31/00:05:38"
     }
+
+
+# ---------------------------------------------------------------------------
+# Stations and playback. A service's top menu (for Pandora: your stations)
+# comes from two commands:
+#   NSV0401 -> pushes "NLT0401000000480100FF0400Pandora": service 04, list UI
+#              (0), service top layer (1), 0x48 = 72 items, layer number 01
+#   NLAL0001 01 0000 0048 -> "NLAX0001S000<?xml ...><item icontype="M"
+#              title="Pearl Jam Radio" .../>..." (every item, as XML)
+# Items with icontype "M" are music (stations, "Shuffle"), and "0" marks the
+# one playing now; the rest are things like "Create new station" (G) and
+# "Account Info"/"Sign Out" (-), which must never be selected. "NLSI00003" plays item 3 (counting from 1).
+# ---------------------------------------------------------------------------
+
+async def service_menu(service: NetService, host: str) -> list[tuple[int, str]]:
+    """(position, title) of each playable item in a service's top menu."""
+    code = NET_SERVICE_CODES[service]
+    # "NLT<code>01": a list (0) at the service's top layer (1). The playback
+    # screen pushes "NLT<code>22..." while music plays, which isn't the menu.
+    title = await call_receiver(
+        f"NSV{code}0", f"NLT{code}01", host,
+        no_reply=f"The receiver didn't open {service}. It may not offer {service}, "
+                 "or it isn't signed in: check in the Onkyo Controller app.")
+    count, layer = int(title[4:8], 16), title[8:10]
+    # Expect "NLAX", not "NLA": send() would take "NLAL..." for a setter and
+    # wait for it to be echoed back, which never happens.
+    reply = await call_receiver(f"NLAL0001{layer}0000{min(count, 0xFFF):04X}", "NLAX", host)
+    if reply[4:5] != "S":  # "0001S000<?xml..." = success
+        raise ToolError(f"The receiver couldn't list {service}'s menu.")
+    items = ElementTree.fromstring(reply[8:]).iter("item")
+    return [(position, item.get("title", ""))
+            for position, item in enumerate(items, start=1)
+            if item.get("icontype") in ("M", "0")]  # music, or playing now
+
+
+@mcp.tool(title="List stations", annotations=SETTER)
+async def list_stations(service: NetService = "pandora", receiver: Receiver = None) -> list[str]:
+    """List what can be played from a network service's top menu: for
+    Pandora, your stations ("Shuffle", "Pearl Jam Radio", ...). Pass one of
+    the names to play_station. This opens the service's menu on the receiver
+    but doesn't interrupt what's playing."""
+    titles = [title for _, title in await service_menu(service, receiver or HOST)]
+    return list(dict.fromkeys(titles))  # each name once, in menu order
+
+
+@mcp.tool(title="Play station", annotations=SETTER)
+async def play_station(station: str, service: NetService = "pandora",
+                       receiver: Receiver = None) -> str:
+    """Start playing a station from a network service, by name (e.g. "Pearl
+    Jam Radio" on Pandora). Names come from list_stations; a distinctive part
+    of a name is enough ("pearl jam"). It plays in every zone whose input is
+    "net": set a zone's input to "net" first to hear it."""
+    host = receiver or HOST
+    items = await service_menu(service, host)
+    wanted = station.casefold().strip()
+    matches = ([item for item in items if item[1].casefold() == wanted]
+               or [item for item in items if wanted in item[1].casefold()])
+    names = list(dict.fromkeys(title for _, title in matches))
+    if not names:
+        raise ToolError(f"{service} has no station matching {station!r}. "
+                        "Call list_stations to see the names.")
+    if len(names) > 1:
+        raise ToolError(f"{station!r} matches several stations: {', '.join(names[:10])}. "
+                        "Which one?")
+    position, title = matches[0]
+    # Confirmed when the player reports "playing" (NST "P..."), after ~3s
+    await call_receiver(f"NLSI{position:05d}", "NSTP", host, timeout=3 * TIMEOUT,
+                        no_reply=f"{title} was selected but didn't start playing.")
+    return f"Playing {title} on {service}"
+
+
+PlaybackAction = Literal["play", "pause", "stop", "next", "previous"]
+# The NTC command for each action, and the NST play state that confirms it
+PLAYBACK_CODES = {"play": ("PLAY", "P"), "pause": ("PAUSE", "p"), "stop": ("STOP", "S"),
+                  "next": ("TRUP", None), "previous": ("TRDN", None)}
+
+
+@mcp.tool(title="Control playback", annotations=PLAYBACK)
+async def control_playback(action: PlaybackAction, receiver: Receiver = None) -> str:
+    """Play, pause, stop, or skip to the next/previous track on the network
+    player (shared by every zone on "net"). "play" resumes what was paused;
+    to start a station, use play_station. Services limit skipping: Pandora
+    allows a few skips per hour and can't go back."""
+    host = receiver or HOST
+    code, state = PLAYBACK_CODES[action]
+    if state:
+        await call_receiver(f"NTC{code}", f"NST{state}", host,
+                            no_reply=f"The player didn't {action}. Is something "
+                                     "selected? Start a station with play_station.")
+        return {"play": "Playing", "pause": "Paused", "stop": "Stopped"}[action]
+    # A skip has no state to wait for: watch for the title to change
+    before = await call_receiver("NTIQSTN", "NTI", host)
+    await call_receiver(f"NTC{code}", None, host)
+    for _ in range(int(TIMEOUT / 0.5)):
+        await asyncio.sleep(0.5)
+        title = await call_receiver("NTIQSTN", "NTI", host)
+        if title != before:
+            return f"Now playing {title.strip()}"
+    raise ToolError(f"The track didn't change. The service may not allow that "
+                    f"right now (Pandora limits skips per hour and can't go back).")
 
 
 def main() -> None:

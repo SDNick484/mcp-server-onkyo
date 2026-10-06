@@ -49,5 +49,12 @@ Observed on real hardware (TX-NR7100 is the awkward one; the TX-NR6050 answers i
   `NRIQSTN` returns XML with <netservicelist> (AirPlay is 44, TIDAL 1b, Amazon 1c;
   the onkyo-eiscp tables are wrong or missing for these) and <zonelist> (value=1
   present, volmax=0 no volume control). The server caches the zone list per host.
+- Stations: `NLT<code>01` (list UI, service top) gives item count (hex) and layer;
+  `NLAL<seq><layer><start><count>` returns all items as XML, reply prefix `NLAX`
+  (expect "NLAX", not "NLA", or send()'s setter-echo rule waits forever);
+  `NLSI<5-digit position, from 1>` plays one, confirmed by `NSTP`. icontype `M` =
+  music, `0` = the item playing now, `G`/`-` = "Create new station", "Account
+  Info", "Sign Out" (never select). `NTC` PLAY/PAUSE/STOP confirm via NST P/p/S;
+  TRUP has no state change, so watch NTI. `NDN` = station name.
 - `NSV` (select network service) has no echo: the confirmation is a pushed
   `NLT<service code>...<name>`. Text fields (titles, stations) are UTF-8.
