@@ -55,7 +55,9 @@ async def test_get_status(client):
     result = await client.call_tool("get_status", {})
     assert json.loads(text(result)) == {"receiver": "127.0.0.1", "zone": "main", "power": "on",
                                         "volume": 40.0, "muted": False,
-                                        "input": "bd-dvd", "listening_mode": "stereo"}
+                                        "input": "bd-dvd", "listening_mode": "stereo",
+                                        # the fake has Zone 2 (in standby), no Zone 3
+                                        "other_zones": {"zone2": "standby"}}
 
 
 @pytest.fixture
@@ -306,8 +308,17 @@ async def test_net_service_names_match_code_table(client):
 
 async def test_now_playing_idle(client, receiver):
     result = json.loads(text(await client.call_tool("get_now_playing", {})))
-    assert result == {"receiver": "127.0.0.1", "service": "NET", "state": "stopped",
+    assert result == {"receiver": "127.0.0.1", "service": None, "menu": "NET", "state": "stopped",
                       "title": None, "artist": None, "album": None, "position": None}
+
+
+async def test_now_playing_service_survives_menu_browsing(client, receiver):
+    # Pandora keeps playing after someone goes back to the top menu: NLT then
+    # says "NET", but NMS still ends with Pandora's icon
+    await client.call_tool("select_net_service", {"service": "pandora"})
+    receiver["NLT"] = "F3000000000E0000FFFF00NET"
+    result = json.loads(text(await client.call_tool("get_now_playing", {})))
+    assert (result["service"], result["menu"]) == ("pandora", "NET")
 
 
 async def test_now_playing_track_with_accents(client, receiver):
@@ -315,7 +326,7 @@ async def test_now_playing_track_with_accents(client, receiver):
                     NTM="00:01:02/00:04:00")
     await client.call_tool("select_net_service", {"service": "pandora"})
     result = json.loads(text(await client.call_tool("get_now_playing", {})))
-    assert result == {"receiver": "127.0.0.1", "service": "pandora", "state": "playing",
+    assert result == {"receiver": "127.0.0.1", "service": "pandora", "menu": "Pandora", "state": "playing",
                       "title": "Déjà Vu", "artist": "Beyoncé", "album": "B'Day",
                       "position": "00:01:02/00:04:00"}
 

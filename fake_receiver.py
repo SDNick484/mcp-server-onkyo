@@ -25,7 +25,7 @@ import sys
 DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00",
                  "ZPW": "00", "ZVL": "50", "ZMT": "00", "SLZ": "80",
                  # Network player, showing its top menu ("NET"), nothing playing
-                 "NLT": "F3000000000E0000FFFF00NET", "NST": "Sxx1", "NTI": "", "NAT": "",
+                 "NLT": "F3000000000E0000FFFF00NET", "NMS": "xxxxxxxF3", "NST": "Sxx1", "NTI": "", "NAT": "",
                  "NAL": "", "NTM": "--:--:--/--:--:--",
                  # Its self-description (trimmed): a TX-NR6050, Zone 2 but no Zone 3
                  "NRI": '<?xml version="1.0" encoding="utf-8"?><response status="ok"><device id="TX-NR6050">'
@@ -70,6 +70,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                 # No reply of its own: the receiver pushes its new menu title
                 if param[:2] in NET_SERVICES:
                     state["NLT"] = f"{param[:2]}01000000480100FF0400{NET_SERVICES[param[:2]]}"
+                    state["NMS"] = f"MxxxxS1{param[:2]}"  # ends with the service icon
                     writer.write(packet("NLT" + state["NLT"]))
             elif code not in state:
                 writer.write(packet(f"{code}N/A"))

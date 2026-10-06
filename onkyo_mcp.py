@@ -119,6 +119,10 @@ NET_SERVICE_CODES: dict[str, str] = {
     "amazon-music": "1C", "airplay": "44", "tunein": "0E",
 }
 CODE_NET_SERVICES = {code: name for name, code in NET_SERVICE_CODES.items()}
+# Other sources the network player can be playing (NMS service icons; AirPlay
+# shows as 18 there even though it is selected as 44)
+CODE_NET_SERVICES |= {"00": "music-server", "18": "airplay", "F0": "usb", "F1": "usb",
+                      "F4": "bluetooth"}
 # NST play state: first character of the reply ("Pxx1" = playing)
 PLAY_STATES = {"P": "playing", "p": "paused", "S": "stopped", "F": "fast-forward",
                "R": "rewind", "E": "end"}
@@ -459,11 +463,12 @@ ZoneArg = Annotated[Zone, Field(
 
 @mcp.tool(title="Get receiver status", annotations=READ_ONLY)
 async def get_status(receiver: Receiver = None, zone: ZoneArg = "main") -> dict:
-    """Get one zone's power state, volume (0-100), mute state and selected
-    input, plus the listening mode for the main zone. Each zone is separate:
-    to see whether music is playing in another room, ask for zone2 or zone3.
-    If there are several receivers on the network, call discover_receivers
-    first and pass the one you want."""
+    """Get the status of one zone: pass zone="zone2" (or "zone3") for another
+    room; the default is the main zone. Returns power state, volume (0-100),
+    mute state and selected input, plus, for the main zone, the listening
+    mode and "other_zones": the power state of each other zone the receiver
+    has, so you know which to ask about. If there are several receivers on
+    the network, call discover_receivers first and pass the one you want."""
     host = receiver or HOST
     await check_zone(host, zone)
     codes = ZONE_CODES[zone]
@@ -486,7 +491,27 @@ async def get_status(receiver: Receiver = None, zone: ZoneArg = "main") -> dict:
     if zone == "main":  # zones 2/3 have no surround processing
         mode = await call_receiver("LMDQSTN", "LMD", host)
         status["listening_mode"] = CODE_MODES.get(mode, f"LMD{mode}") if mode and mode != "N/A" else None
+        status["other_zones"] = await other_zones(host)
     return status
+
+
+async def other_zones(host: str) -> dict[str, str]:
+    """Power state of each zone besides main that the receiver says it has,
+    e.g. {"zone2": "on"}. Best effort: a zone that doesn't answer is left out."""
+    try:
+        layout = await zone_layout(host)
+    except OSError:  # includes TimeoutError
+        return {}
+    zones = {}
+    for zone, info in (layout or {"zones": {}})["zones"].items():
+        if info["present"]:
+            code = ZONE_CODES[zone]["power"]
+            try:
+                power = await send(f"{code}QSTN", expect=code, host=host)
+            except OSError:
+                continue
+            zones[zone] = "on" if power == "01" else "standby"
+    return zones
 
 
 async def check_zone(receiver: str | None, zone: Zone, volume: bool = False) -> None:
@@ -615,11 +640,15 @@ async def select_net_service(service: NetService, receiver: Receiver = None) -> 
 
 @mcp.tool(title="Get now playing", annotations=READ_ONLY)
 async def get_now_playing(receiver: Receiver = None) -> dict:
-    """What the receiver's network player is playing: the service (or the
-    menu it is showing), play state, title, artist, album and position. Every
-    zone whose input is "net" plays this; check get_status to see which zones
-    are on "net"."""
+    """What the receiver's network player is playing: the service, play state,
+    title, artist, album and position, plus the menu its screen is showing
+    (which can differ: browsing doesn't stop playback). Every zone whose input
+    is "net" plays this; check get_status to see which zones are on "net"."""
     host = receiver or HOST
+    # NMS (menu status) ends with the playing service's icon code, e.g.
+    # "MxxxxS104" = Pandora. NLT is the menu on screen, e.g. "...NET" when
+    # someone has gone back to the top menu while Pandora keeps playing.
+    menu_status = await call_receiver("NMSQSTN", "NMS", host)
     menu = await call_receiver("NLTQSTN", "NLT", host)
     state = await call_receiver("NSTQSTN", "NST", host)
     title = await call_receiver("NTIQSTN", "NTI", host)
@@ -628,9 +657,9 @@ async def get_now_playing(receiver: Receiver = None) -> dict:
     position = await call_receiver("NTMQSTN", "NTM", host)
     return {
         "receiver": host,
+        "service": CODE_NET_SERVICES.get(menu_status[-2:]),  # None at the top menu ("F3")
         # NLT: service code, 20 status characters, then the menu's title
-        # ("NET" for the top menu). Prefer our name for a known service.
-        "service": CODE_NET_SERVICES.get(menu[:2], menu[22:] or None),
+        "menu": menu[22:] or None,
         "state": PLAY_STATES.get(state[:1], state or None),
         "title": title.strip() or None,
         "artist": artist.strip() or None,
