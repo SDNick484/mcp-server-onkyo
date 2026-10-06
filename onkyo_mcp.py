@@ -544,9 +544,10 @@ def zone_prefix(zone: Zone) -> str:
 
 @mcp.tool(title="Set power", annotations=SETTER)
 async def set_power(on: bool, receiver: Receiver = None, zone: ZoneArg = "main") -> str:
-    """Turn a zone on, or put it into standby. Zones are independent: zone2
-    can play while the main zone is in standby. After power-on, some receivers
-    need about 15 seconds before they accept other commands."""
+    """Turn any zone on or into standby: the main zone by default, or another
+    room with zone="zone2" / "zone3". Zones are independent: zone2 can play
+    while the main zone is in standby. After power-on, some receivers need
+    about 15 seconds before they accept other commands."""
     await check_zone(receiver, zone)
     code = ZONE_CODES[zone]["power"]
     # Power changes are slow to confirm (a TX-NR7100 takes ~10s to reach standby)
@@ -563,9 +564,10 @@ async def set_power(on: bool, receiver: Receiver = None, zone: ZoneArg = "main")
 
 @mcp.tool(title="Set volume", annotations=SETTER)
 async def set_volume(level: float, receiver: Receiver = None, zone: ZoneArg = "main") -> str:
-    """Set a zone's volume on the receiver's 0-100 display scale (0.5 steps on
-    newer models). Values above the configured safety cap are clamped; the
-    cap applies to every zone."""
+    """Set the volume of any zone: the main zone by default, or another room
+    with zone="zone2" / "zone3". Uses the receiver's 0-100 display scale (0.5
+    steps on newer models), the same for every zone. Values above the
+    configured safety cap are clamped; the cap applies to every zone."""
     await check_zone(receiver, zone, volume=True)
     clamped = max(0.0, min(level, MAX_VOLUME))
     code = ZONE_CODES[zone]["volume"]
@@ -580,7 +582,8 @@ async def set_volume(level: float, receiver: Receiver = None, zone: ZoneArg = "m
 
 @mcp.tool(title="Set mute", annotations=SETTER)
 async def set_mute(muted: bool, receiver: Receiver = None, zone: ZoneArg = "main") -> str:
-    """Mute or unmute a zone."""
+    """Mute or unmute any zone: the main zone by default, or another room
+    with zone="zone2" / "zone3"."""
     await check_zone(receiver, zone)
     code = ZONE_CODES[zone]["mute"]
     reply = await call_receiver(f"{code}01" if muted else f"{code}00", code, receiver, zone=zone)
@@ -591,7 +594,8 @@ async def set_mute(muted: bool, receiver: Receiver = None, zone: ZoneArg = "main
 
 @mcp.tool(title="Select input", annotations=SETTER)
 async def set_input(source: Source, receiver: Receiver = None, zone: ZoneArg = "main") -> str:
-    """Select a zone's input source. Names match the receiver's front-panel
+    """Select the input of any zone: the main zone by default, or another
+    room with zone="zone2" / "zone3". Names match the receiver's front-panel
     labels (e.g. "bd-dvd" for the BD/DVD input, "net" for network streaming).
     "same-as-main" (zone2/zone3 only) plays whatever the main zone is playing.
     The zone must be on."""
