@@ -26,7 +26,15 @@ DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"
                  "ZPW": "00", "ZVL": "50", "ZMT": "00", "SLZ": "80",
                  # Network player, showing its top menu ("NET"), nothing playing
                  "NLT": "F3000000000E0000FFFF00NET", "NST": "Sxx1", "NTI": "", "NAT": "",
-                 "NAL": "", "NTM": "--:--:--/--:--:--"}
+                 "NAL": "", "NTM": "--:--:--/--:--:--",
+                 # Its self-description (trimmed): a TX-NR6050, Zone 2 but no Zone 3
+                 "NRI": '<?xml version="1.0" encoding="utf-8"?><response status="ok"><device id="TX-NR6050">'
+                        '<model>TX-NR6050</model><zonelist count="4">'
+                        '<zone id="1" value="1" name="Main" volmax="100"/>'
+                        '<zone id="2" value="1" name="Zone2" volmax="100"/>'
+                        '<zone id="3" value="0" name="Zone3" volmax="0"/>'
+                        '<zone id="4" value="0" name="Zone4" volmax="0"/>'
+                        '</zonelist></device></response>'}
 # Services NSV can switch to (the rest get no reply, like a service the
 # receiver doesn't offer), and the menu title each one shows
 NET_SERVICES = {"04": "Pandora", "1C": "Amazon Music"}

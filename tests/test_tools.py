@@ -256,10 +256,26 @@ async def test_zone2_in_standby_says_so(client, receiver):
 
 
 async def test_missing_zone_says_so(client, receiver):
-    # The fake has no zone 3: it answers "N/A" to PW3QSTN
+    # The fake describes itself (NRIQSTN) as a TX-NR6050, which has no zone 3
     result = await client.call_tool("get_status", {"zone": "zone3"})
     assert result.is_error
+    assert "The TX-NR6050 at 127.0.0.1 has no Zone 3." in text(result)
+
+
+async def test_missing_zone_without_self_description(client, receiver):
+    # Older models answer "N/A" to NRIQSTN; then the zone's own reply decides
+    receiver["NRI"] = "N/A"
+    result = await client.call_tool("get_status", {"zone": "zone3"})
     assert "doesn't have Zone 3" in text(result)
+
+
+async def test_fixed_volume_zone_says_so(client, receiver):
+    # Like the owner's TX-NR7100, whose Zone 2 outputs drive height speakers
+    receiver["NRI"] = receiver["NRI"].replace('name="Zone2" volmax="100"', 'name="Zone2" volmax="0"')
+    result = await client.call_tool("set_volume", {"level": 20, "zone": "zone2"})
+    assert result.is_error
+    assert "Zone 2 of the TX-NR6050 at 127.0.0.1 has no volume control" in text(result)
+    assert receiver["ZVL"] == "50"  # never sent
 
 
 async def test_same_as_main_only_for_other_zones(client, receiver):

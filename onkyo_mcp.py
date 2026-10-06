@@ -24,6 +24,7 @@ import logging
 import os
 import struct
 from typing import Annotated, Literal
+from xml.etree import ElementTree
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -106,14 +107,14 @@ MODE_CODES: dict[str, str] = {
 CODE_MODES = {code: name for name, code in MODE_CODES.items()}
 
 # Network services (NSV codes): the services the Onkyo Controller app offers
-# for a TX-NR6050/7100. Codes are from the newer list in onkyo-eiscp issue
-# #140 (its main table has TIDAL as 19 and no Amazon Music). What a receiver
-# offers depends on model, region and firmware, and most services must be
-# signed in on the receiver first. Verified on a TX-NR6050: pandora.
+# for a TX-NR6050/7100. Codes as the receivers list them in their own
+# description (NRIQSTN, <netservicelist>); onkyo-eiscp's tables have TIDAL as
+# 19, AirPlay as 18 and no Amazon Music. Most services must be signed in on
+# the receiver first. Verified on a TX-NR6050: pandora.
 NetService = Literal["pandora", "spotify", "deezer", "tidal", "amazon-music", "airplay"]
 NET_SERVICE_CODES: dict[str, str] = {
     "pandora": "04", "spotify": "0A", "deezer": "12", "tidal": "1B",
-    "amazon-music": "1C", "airplay": "18",
+    "amazon-music": "1C", "airplay": "44",
 }
 CODE_NET_SERVICES = {code: name for name, code in NET_SERVICE_CODES.items()}
 # NST play state: first character of the reply ("Pxx1" = playing)
@@ -276,6 +277,36 @@ async def send(command: str, expect: str | None = None, timeout: float | None = 
         await writer.wait_closed()
 
 
+# Each receiver describes itself in XML (NRIQSTN): model, inputs, network
+# services and zones, e.g. for a TX-NR6050:
+#   <zone id="2" value="1" name="Zone2" volmax="100" .../>   present
+#   <zone id="3" value="0" name="Zone3" volmax="0" .../>     absent
+# volmax="0" on a present zone means it has no volume control (fixed-level
+# output). Fetched once per receiver, as it only changes with the setup.
+_layouts: dict[str, dict | None] = {}
+
+
+async def zone_layout(host: str) -> dict | None:
+    """{"model": "TX-NR6050", "zones": {"zone2": {"present": True, "volume": True},
+    "zone3": {...}}}, or None if the receiver doesn't describe itself."""
+    key = f"{host}:{PORT}"
+    if key not in _layouts:
+        xml = await send("NRIQSTN", expect="NRI", host=host, timeout=3 * TIMEOUT)
+        try:
+            root = ElementTree.fromstring(xml)
+        except ElementTree.ParseError:  # "N/A": an older model without NRI
+            _layouts[key] = None
+            return None
+        zones = {}
+        for zone in root.iter("zone"):
+            name = {"2": "zone2", "3": "zone3"}.get(zone.get("id", ""))
+            if name:
+                zones[name] = {"present": zone.get("value") == "1",
+                               "volume": zone.get("volmax", "0") != "0"}
+        _layouts[key] = {"model": root.findtext(".//model") or "receiver", "zones": zones}
+    return _layouts[key]
+
+
 # ---------------------------------------------------------------------------
 # Debug logging of MCP traffic.
 #
@@ -432,6 +463,7 @@ async def get_status(receiver: Receiver = None, zone: ZoneArg = "main") -> dict:
     If there are several receivers on the network, call discover_receivers
     first and pass the one you want."""
     host = receiver or HOST
+    await check_zone(host, zone)
     codes = ZONE_CODES[zone]
     power = await call_receiver(f"{codes['power']}QSTN", codes["power"], host, zone=zone)
     if power == "N/A":
@@ -455,6 +487,28 @@ async def get_status(receiver: Receiver = None, zone: ZoneArg = "main") -> dict:
     return status
 
 
+async def check_zone(receiver: str | None, zone: Zone, volume: bool = False) -> None:
+    """Fail fast, with a clear reason, for a zone the receiver says it doesn't
+    have (or, with volume=True, can't change the volume of). Without this, the
+    receiver just stays silent and the model gets a timeout after seconds."""
+    if zone == "main":
+        return
+    host = receiver or HOST
+    try:
+        layout = await zone_layout(host)
+    except OSError:  # includes TimeoutError
+        return  # can't tell: let the command itself find out
+    info = layout and layout["zones"].get(zone)
+    if not info:
+        return
+    label = ZONE_LABELS[zone]
+    if not info["present"]:
+        raise ToolError(f"The {layout['model']} at {host} has no {label}.")
+    if volume and not info["volume"]:
+        raise ToolError(f"{label} of the {layout['model']} at {host} has no volume control "
+                        "(fixed-level output, or its outputs are used for other speakers).")
+
+
 def zone_prefix(zone: Zone) -> str:
     # Replies for the main zone read as before ("Volume is now 30.0"); other
     # zones say which one they're about ("Zone 2: Volume is now 30.0").
@@ -466,6 +520,7 @@ async def set_power(on: bool, receiver: Receiver = None, zone: ZoneArg = "main")
     """Turn a zone on, or put it into standby. Zones are independent: zone2
     can play while the main zone is in standby. After power-on, some receivers
     need about 15 seconds before they accept other commands."""
+    await check_zone(receiver, zone)
     code = ZONE_CODES[zone]["power"]
     # Power changes are slow to confirm (a TX-NR7100 takes ~10s to reach standby)
     reply = await call_receiver(f"{code}01" if on else f"{code}00", code, receiver,
@@ -484,6 +539,7 @@ async def set_volume(level: float, receiver: Receiver = None, zone: ZoneArg = "m
     """Set a zone's volume on the receiver's 0-100 display scale (0.5 steps on
     newer models). Values above the configured safety cap are clamped; the
     cap applies to every zone."""
+    await check_zone(receiver, zone, volume=True)
     clamped = max(0.0, min(level, MAX_VOLUME))
     code = ZONE_CODES[zone]["volume"]
     reply = await call_receiver(f"{code}{volume_to_raw(clamped)}", code, receiver, zone=zone)
@@ -498,6 +554,7 @@ async def set_volume(level: float, receiver: Receiver = None, zone: ZoneArg = "m
 @mcp.tool(title="Set mute", annotations=SETTER)
 async def set_mute(muted: bool, receiver: Receiver = None, zone: ZoneArg = "main") -> str:
     """Mute or unmute a zone."""
+    await check_zone(receiver, zone)
     code = ZONE_CODES[zone]["mute"]
     reply = await call_receiver(f"{code}01" if muted else f"{code}00", code, receiver, zone=zone)
     if reply == "N/A":
@@ -513,6 +570,7 @@ async def set_input(source: Source, receiver: Receiver = None, zone: ZoneArg = "
     The zone must be on."""
     if source == "same-as-main" and zone == "main":
         raise ToolError('"same-as-main" only applies to zone2 and zone3.')
+    await check_zone(receiver, zone)
     code = ZONE_CODES[zone]["input"]
     reply = await call_receiver(f"{code}{SOURCE_CODES[source]}", code, receiver, zone=zone)
     if reply == "N/A":

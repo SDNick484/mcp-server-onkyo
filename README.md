@@ -34,8 +34,24 @@ Without it, tools talk to `ONKYO_HOST`.
 **Zones.** `get_status`, `set_power`, `set_volume`, `set_mute` and `set_input`
 take an optional `zone`: `main` (the default, the room the receiver is in),
 `zone2` or `zone3` (speakers in other rooms). Zones are independent: Zone 2 can
-play while the main zone is in standby. Not every receiver has Zone 3, and a
-zone that feeds another amplifier may have fixed volume.
+play while the main zone is in standby. The server asks each receiver which
+zones it has (once, via its `NRIQSTN` self-description), so a missing zone,
+or a zone without volume control, gets a clear answer instead of a timeout.
+
+Zones on recent Onkyo models:
+
+| Model | Zones | Multi-zone outputs |
+| --- | --- | --- |
+| TX-RZ71, TX-RZ70 | 3 | Main, powered Zone 2 / line out, Zone 3 line out; HDMI Zone 2 |
+| TX-RZ61, TX-RZ51, TX-RZ50 | 3 | Main, powered Zone 2 / line out, Zone 3 line out |
+| TX-NR7200 | 3 | Main, powered Zone 2, Zone 3 line out |
+| TX-NR7100 | 3 | Main, powered Zone 2 / line out, Zone 3 line out; HDMI Zone 2 |
+| TX-RZ31, TX-RZ30 | 2 | Main, powered Zone 2 / line out |
+| TX-NR6200, TX-NR6100, TX-NR6050, TX-NR5100 | 2 | Main, powered Zone 2 / line out |
+
+What's usable also depends on the speaker setup. A powered Zone 2's amplifier
+channels can be assigned to other speakers instead (e.g. height channels in
+a 5.2.4 layout), and then that zone can't be used, or has no volume control.
 
 **Network audio.** A receiver has one network player, shared by every zone
 whose input is `net`. To play Pandora in Zone 2: `set_power` and
