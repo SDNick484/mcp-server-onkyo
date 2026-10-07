@@ -1,5 +1,7 @@
 # mcp-server-onkyo
 
+[![CI](https://github.com/SDNick484/mcp-server-onkyo/actions/workflows/ci.yml/badge.svg)](https://github.com/SDNick484/mcp-server-onkyo/actions/workflows/ci.yml)
+
 An [MCP](https://modelcontextprotocol.io) server for controlling Onkyo AV
 receivers over the network, so Claude Code, Claude Desktop, or any other MCP
 client can power them on, set the volume, mute them, and find them on your
@@ -181,6 +183,8 @@ free port):
 pip install -e '.[dev]'
 pytest
 ```
+
+CI runs the same tests on Python 3.11-3.14 for every push and pull request.
 
 The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) lets you
 browse `tools/list`, call tools by hand and watch the JSON-RPC traffic.
