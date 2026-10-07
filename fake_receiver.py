@@ -147,8 +147,12 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                 writer.write(packet(code + state[code]))
                 print(f"-> {code}{state[code]}", file=sys.stderr)
             await writer.drain()
-    except asyncio.IncompleteReadError:
-        pass  # client closed the connection
+    except (asyncio.IncompleteReadError, ConnectionError):
+        # Client closed the connection. ConnectionError covers a reset or broken
+        # pipe while we were still answering: send() without `expect` writes one
+        # command and hangs up at once, and on a fast local link drain() can
+        # notice. Left uncaught, anyio re-raises it in whatever test is running.
+        pass
     finally:
         writer.close()
 

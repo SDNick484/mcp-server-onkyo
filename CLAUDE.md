@@ -38,7 +38,9 @@ Observed on real hardware (TX-NR7100 is the awkward one; the TX-NR6050 answers i
 - Slow: ~1.5s for a query, ~4s to confirm power-on, up to ~10s to confirm standby.
 - In standby it answers queries but silently ignores setters (no `N/A`).
 - After confirming `PWR01` it pushes a status burst and ignores setters for ~15s.
-- Discovery broadcasts don't reach either receiver on the owner's LAN; unicast does.
+- Discovery broadcasts didn't reach either receiver from the owner's WSL2 machine
+  (unicast did). From the owner's native Linux laptop on Wi-Fi, the default
+  255.255.255.255 broadcast finds both (2026-10-07), so the LAN itself passes it.
 - The owner's TX-NR7100 runs 5.2.4 using the Zone 2 outputs for height channels,
   so it has only the main zone: its zone commands answer queries but don't work
   (Zone 2 volume `N/A` even when "on", Zone 3 ignores power-on). The TX-NR6050 has
