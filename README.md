@@ -61,7 +61,14 @@ a 5.2.4 layout), and then that zone can't be used, or has no volume control.
 whose input is `net`. To play Pandora in Zone 2: `set_power` and
 `set_input net` with `zone2`, then `play_station` with a station name from
 `list_stations` (e.g. "Pearl Jam Radio"). Only music items can be played, so
-menu entries like "Sign Out" are never selected. Which
+menu entries like "Sign Out" are never selected.
+
+Folders work too: `list_stations` returns a menu's folders as well as what
+it can play, and both tools take a `folder` path, e.g. TuneIn's
+`["My Presets"]` or a music server's `["MiniDLNA", "Music", "Album", "21"]`
+(part of each name is enough). Long menus are read 100 items at a time.
+Browsing the playing service doesn't interrupt it, but opening a different
+service stops the music. Which
 services work depends on the model, region and firmware, and each must be
 signed in on the receiver (e.g. in the Onkyo Controller app); if one isn't,
 the tools say so and quote the receiver's sign-in screen. The list matches
@@ -72,7 +79,7 @@ correctly on a TX-NR6050:
 | Service | What happens |
 | --- | --- |
 | Pandora | Stations listed and played by name |
-| TuneIn, Music Server | Menu opens; their stations and music are inside folders, which can't be browsed yet |
+| TuneIn, Music Server | Browsed through folders (presets, albums, artists); tracks and stations played by name |
 | TIDAL, Amazon Music, Deezer | Menu opens if signed in (and subscribed); otherwise a clear "isn't ready" message |
 | Spotify, AirPlay | Selected; playback is started from a phone or computer (Spotify Connect, AirPlay) |
 
@@ -271,7 +278,7 @@ ONKYO_DISCOVERY_ADDR=192.168.1.50 mcp-server-onkyo --discover
 - [x] Zone 2 / Zone 3
 - [x] Network services: select a service, now playing
 - [x] Network playback: stations by name, play/pause/stop/next/previous
-- [ ] Browsing into folders: TuneIn presets, music server, playlists, albums
+- [x] Browsing into folders: TuneIn presets, music server albums and artists
 - [ ] Discovery that works where broadcasts are filtered (query a configured
       list of IPs directly)
 - [ ] Typed (structured) tool output

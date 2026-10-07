@@ -344,7 +344,8 @@ async def test_mute_rejected_is_not_reported_as_unmuted(client, receiver):
 async def test_list_stations_only_music(client, receiver):
     result = await client.call_tool("list_stations", {"service": "pandora"})
     # No "Create new station" or "Sign Out"; the duplicate listed once
-    assert result.structured_content["result"] == ["Shuffle", "Pearl Jam Radio", "Beyoncé Radio"]
+    assert json.loads(text(result))["playable"] == ["Shuffle", "Pearl Jam Radio", "Beyoncé Radio"]
+    assert json.loads(text(result))["folders"] == []
 
 
 async def test_play_station_by_partial_name(client, receiver):
@@ -358,7 +359,7 @@ async def test_play_station_by_partial_name(client, receiver):
 async def test_play_station_never_selects_account_items(client, receiver):
     for name in ("Sign Out", "Create new station"):
         result = await client.call_tool("play_station", {"station": name})
-        assert result.is_error and "no station matching" in text(result)
+        assert result.is_error and "No station matching" in text(result)
     assert fake_receiver.selected == []
 
 
@@ -399,7 +400,7 @@ async def test_playing_station_still_listed_and_playable(client, receiver):
     # The receiver marks the playing station icontype "0" instead of "M"
     await client.call_tool("play_station", {"station": "Beyoncé Radio"})
     result = await client.call_tool("list_stations", {})
-    assert result.structured_content["result"] == ["Shuffle", "Pearl Jam Radio", "Beyoncé Radio"]
+    assert json.loads(text(result))["playable"] == ["Shuffle", "Pearl Jam Radio", "Beyoncé Radio"]
     assert text(await client.call_tool("play_station", {"station": "beyoncé"})) == \
         "Playing Beyoncé Radio on pandora"
 
@@ -440,7 +441,44 @@ async def test_signed_out_service_says_so(client, receiver):
     assert result.is_error and "TIDAL Login" in text(result)
 
 
-async def test_folders_only_menu_says_so(client, receiver):
-    result = await client.call_tool("list_stations", {"service": "tunein"})
+async def test_browse_folders(client, receiver):
+    top = json.loads(text(await client.call_tool("list_stations", {"service": "tunein"})))
+    assert (top["playable"], top["folders"]) == ([], ["My Presets", "Local Radio"])
+    presets = json.loads(text(await client.call_tool("list_stations", {"service": "tunein",
+                                                        "folder": ["presets"]})))
+    assert presets["playable"] == ["KQED Public Radio", "KCSM Jazz"]
+
+
+async def test_play_from_folder(client, receiver):
+    result = await client.call_tool("play_station", {"station": "jazz", "service": "tunein",
+                                                     "folder": ["My Presets"]})
+    assert text(result) == "Playing KCSM Jazz on tunein"
+    assert fake_receiver.selected == [2]  # position inside the folder
+
+
+async def test_play_at_folder_level_points_inside(client, receiver):
+    result = await client.call_tool("play_station", {"station": "kqed", "service": "tunein"})
     assert result.is_error
-    assert "folders, not stations: My Presets, Local Radio" in text(result)
+    assert "It has folders: My Presets, Local Radio" in text(result)
+
+
+async def test_missing_folder_lists_what_is_there(client, receiver):
+    result = await client.call_tool("list_stations", {"service": "tunein", "folder": ["Podcasts"]})
+    assert result.is_error
+    assert "No folder matching 'Podcasts'. Here: My Presets, Local Radio." in text(result)
+
+
+async def test_empty_folder_passes_on_receiver_message(client, receiver):
+    result = await client.call_tool("list_stations", {"service": "tunein", "folder": ["local"]})
+    assert json.loads(text(result))["message"] == "No stations available"
+
+
+
+async def test_long_lists_are_read_in_pages(client, receiver):
+    # 250 albums: three NLA pages (100 + 100 + 50), positions counted across pages
+    albums = json.loads(text(await client.call_tool("list_stations", {
+        "service": "music-server", "folder": ["Album"]})))
+    assert len(albums["folders"]) == 250 and albums["folders"][-1] == "Album 250"
+    result = await client.call_tool("play_station", {
+        "station": "Track 237", "service": "music-server", "folder": ["Album", "Album 237"]})
+    assert text(result) == "Playing Track 237 on music-server"

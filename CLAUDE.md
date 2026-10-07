@@ -59,5 +59,11 @@ Observed on real hardware (TX-NR7100 is the awkward one; the TX-NR6050 answers i
 - A signed-out service opens a popup instead of its menu: `NLT<code>3...` (UI type 3),
   title e.g. "TIDAL Login", "Amazon Music Sign In", "Try Deezer Premium+". TuneIn and
   the music server's top menus are folders only (icontype `F`).
+- Folders: `NLSI<pos>` on an `F` item opens it; the receiver announces the new menu
+  with `NLT<code>02...` whose layer field is one deeper (top 01, then 02, 03, ...),
+  but the old menu's NLT keeps arriving too, so match on the layer (send's `until`).
+  Opening can take 3-5s on a music server. Read long menus in NLA pages of 100
+  (700 albums in one request took 5.3s, 100 take 0.3s).
+- Browsing (NSV) a different service stops what's playing; the same service doesn't.
 - `NSV` (select network service) has no echo: the confirmation is a pushed
   `NLT<service code>...<name>`. Text fields (titles, stations) are UTF-8.

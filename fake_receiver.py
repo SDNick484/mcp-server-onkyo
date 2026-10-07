@@ -27,6 +27,7 @@ DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"
                  # Network player, showing its top menu ("NET"), nothing playing
                  "NLT": "F3000000000E0000FFFF00NET", "NMS": "xxxxxxxF3", "NST": "Sxx1", "NTI": "", "NAT": "",
                  "NAL": "", "NTM": "--:--:--/--:--:--", "NDN": "",
+                 "menu_path": (),  # folders opened (positions), not an eISCP code
                  # Its self-description (trimmed): a TX-NR6050, Zone 2 but no Zone 3
                  "NRI": '<?xml version="1.0" encoding="utf-8"?><response status="ok"><device id="TX-NR6050">'
                         '<model>TX-NR6050</model><zonelist count="4">'
@@ -37,15 +38,29 @@ DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00"
                         '</zonelist></device></response>'}
 # Services NSV can switch to (the rest get no reply, like a service the
 # receiver doesn't offer), and the menu title each one shows
-NET_SERVICES = {"04": "Pandora", "1C": "Amazon Music", "0E": "TuneIn Radio"}
+NET_SERVICES = {"04": "Pandora", "1C": "Amazon Music", "0E": "TuneIn Radio", "00": "Music Server"}
 # A signed-out service opens a popup (UI type 3) instead of its menu
 SIGNED_OUT = {"1B": "TIDAL Login"}
 # Pandora's top menu, as (icontype, title): M = music, the rest must never be
 # played. "Pearl Jam Radio" appears twice, as it does on a real account.
 STATIONS = [("G", "Create new station"), ("M", "Shuffle"), ("M", "Pearl Jam Radio"),
             ("M", "Beyoncé Radio"), ("M", "Pearl Jam Radio"), ("-", "Sign Out")]
-# Other services' top menus: TuneIn has only folders (F)
-MENUS = {"04": STATIONS, "0E": [("F", "My Presets"), ("F", "Local Radio")], "1C": []}
+# Other services' top menus. TuneIn's are folders (F), each with its own
+# items: (icontype, title, contents) for a folder
+MENUS = {"04": STATIONS, "1C": [],
+         # More albums than one NLA page (100) holds, to exercise paging
+         "00": [("F", "Album", [("F", f"Album {n}", [("M", f"Track {n}")]) for n in range(1, 251)])],
+         "0E": [("F", "My Presets", [("M", "KQED Public Radio"), ("M", "KCSM Jazz")]),
+                ("F", "Local Radio", [("-", "No stations available")])]}
+
+
+def current_menu(state: dict) -> list:
+    """The items of the menu on screen: the service's top menu, then down
+    through each folder opened since (positions in state["menu_path"])."""
+    items = MENUS[state["NLT"][:2]]
+    for position in state["menu_path"]:
+        items = items[position - 1][2]
+    return items
 TRACKS = ["Black", "Interstate Love Song", "Garden"]  # what "next" steps through
 selected: list[int] = []  # NLSI positions received, for tests to check
 # Which power command each setting belongs to
@@ -86,21 +101,34 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                     count = len(MENUS[param[:2]])
                     state["NLT"] = f"{param[:2]}010000{count:04X}0100FF0400{NET_SERVICES[param[:2]]}"
                     state["NMS"] = f"MxxxxS1{param[:2]}"  # ends with the service icon
+                    state["menu_path"] = ()  # back at the top menu
                     writer.write(packet("NLT" + state["NLT"]))
             elif code == "NLA" and param.startswith("L"):
                 # The whole list as XML: "X" + sequence number + "S" (success)
-                # The station playing now is marked icontype "0", not "M"
+                # "L" + sequence (4) + layer (2) + first item (4 hex, from 0) + count (4 hex).
+                # The station playing now is marked icontype "0", not "M".
+                start, count = int(param[7:11], 16), int(param[11:15], 16)
+                page = current_menu(state)[start:start + count]
                 items = "".join(f'<item icontype="{"0" if i in selected[-1:] else t}" '
                                 f'title="{title}" selectable="1" />'
-                                for i, (t, title) in enumerate(MENUS[state["NLT"][:2]], start=1))
+                                for i, (t, title, *_) in enumerate(page, start=start + 1))
                 xml = (f'<?xml version="1.0" encoding="utf-8"?><response status="ok">'
                        f'<items offset="0" totalitems="{items.count("<item")}" >{items}</items></response>')
                 writer.write(packet(f"NLAX{param[1:5]}S000{xml}"))
             elif code == "NLS" and param.startswith("I"):
                 position = int(param[1:])
-                selected.append(position)
-                state.update(NDN=STATIONS[position - 1][1], NTI=TRACKS[0], NST="Pxx1")
-                writer.write(packet("NSTSxx1") + packet("NST" + state["NST"]))
+                kind, title, *contents = current_menu(state)[position - 1]
+                if kind == "F":
+                    # Open the folder: one layer deeper, no reply but its title info
+                    code = state["NLT"][:2]
+                    state["menu_path"] += (position,)
+                    layer = len(state["menu_path"]) + 1
+                    state["NLT"] = f"{code}020000{len(contents[0]):04X}{layer:02X}00FF{code}00{title}"
+                    writer.write(packet("NLT" + state["NLT"]))
+                else:
+                    selected.append(position)
+                    state.update(NDN=title, NTI=TRACKS[0], NST="Pxx1")
+                    writer.write(packet("NSTSxx1") + packet("NST" + state["NST"]))
             elif code == "NTC":
                 if param == "TRUP":
                     state["NTI"] = TRACKS[(TRACKS.index(state["NTI"]) + 1) % len(TRACKS)]

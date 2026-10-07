@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import struct
+from collections.abc import Callable
 from typing import Annotated, Literal
 from xml.etree import ElementTree
 
@@ -233,7 +234,8 @@ async def read_packet(reader: asyncio.StreamReader) -> str:
 
 
 async def send(command: str, expect: str | None = None, timeout: float | None = None,
-               host: str | None = None) -> str | None:
+               host: str | None = None,
+               until: Callable[[str], bool] | None = None) -> str | None:
     """Send one command to `host` (default: ONKYO_HOST, required if unset). If `expect` is a
     3-char prefix (e.g. "MVL"), wait for the matching reply. The receiver also
     pushes unsolicited status messages, so we skip anything that doesn't match.
@@ -243,6 +245,9 @@ async def send(command: str, expect: str | None = None, timeout: float | None = 
     value is a status push, not our answer: right after power-on a TX-NR7100
     pushes "AMT00" while still ignoring commands, which would otherwise read as
     "AMT01 failed".
+
+    `until`, if given, must also accept the reply's value: for replies that
+    can't be told apart by prefix alone (e.g. which menu layer an NLT is for).
 
     Raises ConnectionError (an OSError) if it can't connect, and TimeoutError
     if it connected but the reply never came (e.g. a receiver in standby)."""
@@ -273,7 +278,8 @@ async def send(command: str, expect: str | None = None, timeout: float | None = 
             while True:
                 msg = await read_packet(reader)
                 value = msg[len(expect):]  # "MVL50" -> "50"
-                if msg.startswith(expect) and (not is_setter or value in (sent_value, "N/A")):
+                if (msg.startswith(expect) and (not is_setter or value in (sent_value, "N/A"))
+                        and (until is None or until(value))):
                     log.debug("eISCP <- %s %s", host, msg)
                     return value
                 log.debug("eISCP <- %s %s (unsolicited, skipped)", host, msg)
@@ -437,7 +443,8 @@ async def resolve_host(receiver: str | None) -> str:
 
 async def call_receiver(command: str, expect: str | None, receiver: str | None,
                         timeout: float | None = None, zone: Zone = "main",
-                        no_reply: str | None = None) -> str | None:
+                        no_reply: str | None = None,
+                        until: Callable[[str], bool] | None = None) -> str | None:
     """send() for tools: turns network failures into a ToolError whose message
     tells the model what went wrong.
 
@@ -454,7 +461,7 @@ async def call_receiver(command: str, expect: str | None, receiver: str | None,
     # Starts every error message: "The receiver at ..." / "Zone 2 of the receiver at ..."
     who = f"The receiver at {host}" if zone == "main" else f"{ZONE_LABELS[zone]} of the receiver at {host}"
     try:
-        return await send(command, expect=expect, host=host, timeout=timeout)
+        return await send(command, expect=expect, host=host, timeout=timeout, until=until)
     except TimeoutError as exc:
         # Connected, but no reply. Work out the likeliest reason.
         if no_reply:
@@ -661,7 +668,8 @@ async def select_net_service(service: NetService, receiver: Receiver = None) -> 
     Pandora. There is one network player per receiver, shared by every zone
     whose input is "net": set a zone's input to "net" (set_input) to hear it.
     The service must be offered by this receiver and signed in (usually in the
-    Onkyo Controller app). "airplay" and "spotify" are normally started from a
+    Onkyo Controller app). Switching stops whatever another service was
+    playing. "airplay" and "spotify" are normally started from a
     phone (AirPlay, Spotify Connect); selecting them here may only make the
     receiver wait for one. Call get_now_playing afterwards to see what plays."""
     code = NET_SERVICE_CODES[service]
@@ -729,13 +737,57 @@ async def get_now_playing(receiver: Receiver = None) -> dict:
 # "Account Info"/"Sign Out" (-), which must never be selected. "NLSI00003" plays item 3 (counting from 1).
 # ---------------------------------------------------------------------------
 
-async def service_menu(service: NetService, host: str) -> list[tuple[int, str]]:
-    """(position, title) of each playable item in a service's top menu."""
+# A list item: (position from 1, icontype, title)
+Item = tuple[int, str, str]
+LIST_PAGE = 100  # items per NLA request
+
+
+async def read_list(host: str, nlt: str) -> list[Item]:
+    """Every item of the menu the receiver is showing. `nlt` is its NLT title
+    info: service (2), UI type, layer type, cursor (4 hex), item count (4 hex),
+    layer number (2 hex), ..."""
+    count, layer = min(int(nlt[8:12], 16), 0xFFF), nlt[12:14]
+    items: list[Item] = []
+    # In pages: a TX-NR6050 takes 5.3s to send 700 albums in one reply (over
+    # the timeout), but 0.3s per 100.
+    for start in range(0, count, LIST_PAGE):
+        # Expect "NLAX", not "NLA": send() would take "NLAL..." for a setter
+        # and wait for it to be echoed back, which never happens.
+        reply = await call_receiver(
+            f"NLAL0001{layer}{start:04X}{min(LIST_PAGE, count - start):04X}", "NLAX", host)
+        if reply[4:5] != "S":  # "0001S000<?xml..." = success
+            raise ToolError("The receiver couldn't list this menu.")
+        page = ElementTree.fromstring(reply[8:]).iter("item")
+        items += [(position, item.get("icontype", ""), item.get("title", ""))
+                  for position, item in enumerate(page, start=start + 1)]
+    return items
+
+
+def pick(wanted: str, items: list[Item], what: str) -> Item:
+    """The item named `wanted`: an exact match (ignoring case), else the only
+    one containing it. Duplicates (same title twice) count as one."""
+    key = wanted.casefold().strip()
+    matches = ([i for i in items if i[2].casefold() == key]
+               or [i for i in items if key in i[2].casefold()])
+    names = list(dict.fromkeys(title for _, _, title in matches))
+    if not names:
+        available = ", ".join(dict.fromkeys(t for _, _, t in items[:30])) or "nothing"
+        raise ToolError(f"No {what} matching {wanted!r}. Here: {available}"
+                        + (" ..." if len(items) > 30 else "") + ".")
+    if len(names) > 1:
+        raise ToolError(f"{wanted!r} matches several {what}s: {', '.join(names[:10])}. "
+                        "Which one?")
+    return matches[0]
+
+
+async def open_menu(service: NetService, host: str, folder: list[str]) -> tuple[str, list[Item]]:
+    """Open a service's top menu, then each folder in `folder` in turn.
+    Returns the NLT title info and items of the menu reached."""
     code = NET_SERVICE_CODES[service]
     # "NLT<code>01": a list (0) at the service's top layer (1). The playback
     # screen pushes "NLT<code>22..." while music plays, which isn't the menu.
     try:
-        title = await call_receiver(
+        rest = await call_receiver(
             f"NSV{code}0", f"NLT{code}01", host,
             no_reply=f"The receiver didn't open {service}. It may not offer {service}, "
                      "or it isn't signed in: check in the Onkyo Controller app.")
@@ -745,55 +797,78 @@ async def service_menu(service: NetService, host: str) -> list[tuple[int, str]]:
         if shown.startswith(code) and shown[2:3] in ("3", "4"):
             raise ToolError(not_ready(service, shown[22:])) from None
         raise
-    count, layer = int(title[4:8], 16), title[8:10]
-    # Expect "NLAX", not "NLA": send() would take "NLAL..." for a setter and
-    # wait for it to be echoed back, which never happens.
-    reply = await call_receiver(f"NLAL0001{layer}0000{min(count, 0xFFF):04X}", "NLAX", host)
-    if reply[4:5] != "S":  # "0001S000<?xml..." = success
-        raise ToolError(f"The receiver couldn't list {service}'s menu.")
-    items = list(ElementTree.fromstring(reply[8:]).iter("item"))
-    playable = [(position, item.get("title", ""))
-                for position, item in enumerate(items, start=1)
-                if item.get("icontype") in ("M", "0")]  # music, or playing now
-    folders = [item.get("title", "") for item in items if item.get("icontype") == "F"]
-    if not playable and folders:
-        # TuneIn, the music server: stations are a level down
-        raise ToolError(f"{service}'s top menu has folders, not stations: "
-                        f"{', '.join(folders)}. Playing from inside folders isn't "
-                        "supported yet; use the Onkyo Controller app for now.")
-    return playable
+    nlt = f"{code}01{rest}"
+    items = await read_list(host, nlt)
+    for name in folder:
+        position, _, title = pick(name, [i for i in items if i[1] == "F"], "folder")
+        # The receiver announces the folder it opened with its title info,
+        # but the previous menu's info keeps arriving too, with the same
+        # prefix and screen type. So wait for the layer number one deeper.
+        # Opening can take a few seconds (a music server answering), hence
+        # the longer timeout.
+        layer = f"{int(nlt[12:14], 16) + 1:02X}"
+        rest = await call_receiver(
+            f"NLSI{position:05d}", f"NLT{code}", host, timeout=3 * TIMEOUT,
+            until=lambda value: value[10:12] == layer,  # value: after "NLT" + code
+            no_reply=f"The receiver didn't open the folder {title!r}.")
+        nlt = code + rest
+        items = await read_list(host, nlt)
+    return nlt, items
+
+
+FolderPath = Annotated[list[str], Field(
+    description="Folders to open from the service's top menu, in order, e.g. "
+                "[\"My Presets\"] or [\"MiniDLNA Server\", \"Music\", \"Album\", \"21\"]. "
+                "A distinctive part of each name is enough. Empty for the top menu."
+)]
+LIST_LIMIT = 300  # names per kind; a music server's Album folder can hold thousands
 
 
 @mcp.tool(title="List stations", annotations=SETTER)
-async def list_stations(service: NetService = "pandora", receiver: Receiver = None) -> list[str]:
-    """List what can be played from a network service's top menu: for
-    Pandora, your stations ("Shuffle", "Pearl Jam Radio", ...). Pass one of
-    the names to play_station. This opens the service's menu on the receiver
-    but doesn't interrupt what's playing."""
-    titles = [title for _, title in await service_menu(service, await resolve_host(receiver))]
-    return list(dict.fromkeys(titles))  # each name once, in menu order
+async def list_stations(service: NetService = "pandora", folder: FolderPath = [],
+                        receiver: Receiver = None) -> dict:
+    """Browse a network service: list what can be played (stations, tracks)
+    and the folders at one level of its menu. Starts at the top (for Pandora:
+    your stations); to look inside a folder, call again with its name added to
+    `folder` (e.g. TuneIn: ["My Presets"]). Pass a playable name, with the
+    same `folder`, to play_station. Browsing the service that's playing doesn't
+    interrupt it, but opening a different service stops the current music:
+    check get_now_playing first, and ask before browsing another service
+    while something plays."""
+    _, items = await open_menu(service, await resolve_host(receiver), folder)
+    # "M" = music, "0" = playing now, "F" = folder; anything else is a
+    # message ("No Favorites available") or an account item ("Sign Out")
+    playable = list(dict.fromkeys(t for _, kind, t in items if kind in ("M", "0")))
+    folders = list(dict.fromkeys(t for _, kind, t in items if kind == "F"))
+    result: dict = {"service": service, "folder": folder,
+                    "playable": playable[:LIST_LIMIT], "folders": folders[:LIST_LIMIT]}
+    if len(playable) > LIST_LIMIT or len(folders) > LIST_LIMIT:
+        result["truncated"] = (f"There are {len(playable)} playable items and "
+                               f"{len(folders)} folders; only the first {LIST_LIMIT} "
+                               "of each are listed. Names further down still work.")
+    if not playable and not folders:
+        result["message"] = ", ".join(t for _, _, t in items) or "This menu is empty."
+    return result
 
 
 @mcp.tool(title="Play station", annotations=SETTER)
-async def play_station(station: str, service: NetService = "pandora",
+async def play_station(station: str, service: NetService = "pandora", folder: FolderPath = [],
                        receiver: Receiver = None) -> str:
-    """Start playing a station from a network service, by name (e.g. "Pearl
-    Jam Radio" on Pandora). Names come from list_stations; a distinctive part
-    of a name is enough ("pearl jam"). It plays in every zone whose input is
-    "net": set a zone's input to "net" first to hear it."""
+    """Start playing a station or track from a network service, by name (e.g.
+    "Pearl Jam Radio" on Pandora). Names come from list_stations; a
+    distinctive part of a name is enough ("pearl jam"). For items inside
+    folders (TuneIn presets, a music server's albums), pass the same `folder`
+    list_stations used. It plays in every zone whose input is "net": set a
+    zone's input to "net" first to hear it."""
     host = await resolve_host(receiver)
-    items = await service_menu(service, host)
-    wanted = station.casefold().strip()
-    matches = ([item for item in items if item[1].casefold() == wanted]
-               or [item for item in items if wanted in item[1].casefold()])
-    names = list(dict.fromkeys(title for _, title in matches))
-    if not names:
-        raise ToolError(f"{service} has no station matching {station!r}. "
-                        "Call list_stations to see the names.")
-    if len(names) > 1:
-        raise ToolError(f"{station!r} matches several stations: {', '.join(names[:10])}. "
-                        "Which one?")
-    position, title = matches[0]
+    _, items = await open_menu(service, host, folder)
+    playable = [i for i in items if i[1] in ("M", "0")]  # never "Sign Out" and the like
+    if not playable:
+        folders = [t for _, kind, t in items if kind == "F"]
+        hint = (f" It has folders: {', '.join(folders[:30])}; add one to `folder` "
+                "to look inside." if folders else "")
+        raise ToolError(f"Nothing here can be played.{hint}")
+    position, _, title = pick(station, playable, "station")
     # Confirmed when the player reports "playing" (NST "P..."), after ~3s
     await call_receiver(f"NLSI{position:05d}", "NSTP", host, timeout=3 * TIMEOUT,
                         no_reply=f"{title} was selected but didn't start playing.")
