@@ -9,14 +9,22 @@ changes over clever ones. Show the JSON-RPC traffic when it helps.
 - `src/onkyo_mcp/eiscp.py` — the protocol: framing, `Connection`, discovery. No MCP here.
 - `src/onkyo_mcp/codes.py` — command tables (`Literal` names + code dicts) and volume conversion. Pure data.
 - `src/onkyo_mcp/config.py` — `Settings`: receivers (`config.json` / `ONKYO_HOSTS`), names, per-zone
-  volume caps, timeouts. Loading never raises; problems become `Settings.problems`.
+  volume caps, timeouts, dry run. Loading never raises; problems become `Settings.problems`.
 - `src/onkyo_mcp/receivers.py` — `Registry` (which receiver a call means) and `Receiver` (its lock,
   its cached NRI layout). `ReceiverError` is the `ToolError` for anything the model can act on.
-- `src/onkyo_mcp/server.py` — MCP tools. Each runs inside `async with call(receiver) as c:`.
-- `src/onkyo_mcp/remote.py` — Streamable HTTP behind Cloudflare Access. Shared, byte-identical,
-  with mcp-server-shieldtv, -harmony and -sofabaton: change it in all four.
-- `src/onkyo_mcp/sim/fake_receiver.py` — simulated receiver on 127.0.0.1:60128 for
-  hardware-free dev (`python -m onkyo_mcp.sim.fake_receiver`).
+- `src/onkyo_mcp/server.py` — MCP tools, then resources (`onkyo://...`) and prompts at the end.
+  Each tool runs inside `async with call(receiver) as c:`.
+- `src/onkyo_mcp/assumptions.py` — every protocol detail relied on, with confidence and whether
+  hardware confirmed it. Cite ids in code (`# ASSUMPTION O-...`); `tests/test_assumptions.py`
+  keeps code, README and HARDWARE_VALIDATION.md in step with it.
+- `src/onkyo_mcp/cli.py` — `serve` (default), `discover`, `doctor` (`doctor.py`), `simulate`, `call`.
+- `src/onkyo_mcp/remote.py`, `logsafe.py` — Streamable HTTP behind Cloudflare Access, and log
+  redaction. Shared, byte-identical, with mcp-server-shieldtv, -harmony and -sofabaton: change
+  them in all four.
+- `src/onkyo_mcp/sim/` — `fake_receiver.py` (simulated receivers with TX-NR6050 and TX-NR7100
+  profiles, `Faults` for failure injection, `ReplayReceiver` for contract tests) and
+  `transcript.py` (a `--debug` log to a contract-test fixture).
+- `deploy/alpine/` — OpenRC service, install script, and the container smoke test CI runs.
 
 ## Rules for changes
 - **Several receivers: never guess.** Without `receiver`, act only when exactly one is configured
@@ -24,6 +32,11 @@ changes over clever ones. Show the JSON-RPC traffic when it helps.
   names them. A guess turns off the wrong room.
 - **One exchange at a time per receiver.** Talk to a receiver only inside `call()` (or
   `Receiver.session()`), which holds its lock and one connection for the whole tool call.
+- **Don't invent protocol details.** A command code or reply shape not seen on hardware goes in
+  `assumptions.py` (status simulator-only), is cited where the code relies on it, gets a test,
+  and gets a step in HARDWARE_VALIDATION.md.
+- **Setters honor dry run** (`if c.dry_run: return dry_run(...)` before anything is sent);
+  `Call.ask` asserts it as a backstop.
 
 ## Conventions
 - Python 3.11+, official `mcp` SDK v2 (MCPServer, formerly FastMCP), asyncio only (no threads).
@@ -34,12 +47,14 @@ changes over clever ones. Show the JSON-RPC traffic when it helps.
 - Safety limits (e.g. max volume) are enforced server-side, never trusted to the model.
 
 ## Testing
-- Unit: `pytest` (in `tests/`). Each test gets its own `fake_receiver` on a free port.
+- `pytest -q` (in `tests/`). Each test gets its own fake receivers on free ports.
   Async tests use anyio's plugin (`pytest.mark.anyio`), not pytest-asyncio: the
   MCP `Client` fixture needs setup and teardown in the same task.
-- Protocol: `npx @modelcontextprotocol/inspector mcp-server-onkyo`
-- Real hardware: `ONKYO_HOST=<ip> mcp-server-onkyo`
-- Keep README.md's tool table, config table and roadmap in sync with the code.
+- By hand: `mcp-server-onkyo simulate --write-config /tmp/sim`, then with
+  `ONKYO_CONFIG_DIR=/tmp/sim`: `doctor`, `call <tool> key=value`, or the Inspector
+  (`npx @modelcontextprotocol/inspector mcp-server-onkyo`).
+- Real hardware: `mcp-server-onkyo doctor --host <ip>`, then HARDWARE_VALIDATION.md.
+- Keep README.md's tool, config and verification tables and the roadmap in sync with the code.
 
 ## eISCP reference
 Command tables: https://github.com/miracle2k/onkyo-eiscp (eiscp-commands.yaml).
