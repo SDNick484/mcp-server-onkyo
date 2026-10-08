@@ -1127,3 +1127,218 @@ async def control_playback(action: PlaybackAction, receiver: ReceiverArg = None)
         "The track didn't change. The service may not allow that "
         "right now (Pandora limits skips per hour and can't go back)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Resources: context a *client* reads, as opposed to tools the *model* calls.
+#
+# A client lists them (resources/list, resources/templates/list) and reads one
+# (resources/read) to attach it to the conversation, e.g. by @-mentioning
+# "onkyo://receivers" in Claude Code. The model never "calls" a resource, so
+# they carry reference data that is useful up front: which receivers exist,
+# which zones each has, and the names the tools accept. Nothing here sends a
+# setter; reading a receiver's layout is one NRIQSTN, cached afterwards.
+#
+#   onkyo://catalog              names the tools accept (no receiver involved)
+#   onkyo://receivers            every configured receiver, its zones, caps, services
+#   onkyo://receivers/{receiver} one receiver, by name or address (URL-encoded:
+#                                onkyo://receivers/Family%20Room)
+#
+# Subscriptions (resources/subscribe) aren't offered: the Claude apps don't use
+# them, and the receiver's layout changes only when someone rewires it.
+# ---------------------------------------------------------------------------
+CATALOG_ASSUMPTIONS = {
+    "zones": "O-ZONE2-CODES, O-ZONE3-CODES",
+    "inputs": "O-SOURCE-CODES",
+    "listening_modes": "O-LMD-CODES",
+    "net_services": "O-NSV-CODES",
+}
+
+
+@mcp.resource(
+    "onkyo://catalog",
+    name="catalog",
+    title="Zones, inputs, listening modes and network services the tools accept",
+    mime_type="application/json",
+)
+def catalog_resource() -> str:
+    """Static: what the tools' enum arguments mean, with the eISCP code each
+    sends and the assumption (see assumptions.py) the code depends on."""
+    return json.dumps(
+        {
+            "zones": {z: {"label": ZONE_LABELS[z], "commands": ZONE_CODES[z]} for z in ZONE_CODES},
+            "inputs": SOURCE_CODES,
+            "listening_modes": MODE_CODES,
+            "net_services": NET_SERVICE_CODES,
+            "assumptions": CATALOG_ASSUMPTIONS,
+        },
+        indent=1,
+    )
+
+
+async def _receiver_doc(r: Receiver, settings: Settings) -> dict[str, object]:
+    """One receiver as the resources describe it. Its layout comes from the
+    cache, or one NRIQSTN; an unreachable receiver is described as such."""
+    doc: dict[str, object] = {
+        "receiver": r.label,
+        "name": r.settings.name,
+        "host": r.host,
+        "port": r.port,
+        "model": r.model,
+        "reachable": None,  # None: not contacted (layout was cached)
+        "error": None,
+    }
+    known, layout = r.layout_cached()
+    if not known:
+        try:
+            async with r.session(settings.timeout) as session:
+                layout = await session.layout()
+            doc["reachable"] = True
+        except _READ_ERRORS as exc:
+            doc["reachable"], doc["error"] = False, f"{type(exc).__name__}: {exc}".rstrip(": ")
+    doc["model"] = r.model
+    # Without a self-description (older model, or unreachable) only the main
+    # zone is certain; tools still accept zone2/zone3 and find out.
+    zones: dict[Zone, bool] = {"main": True}
+    if layout is not None:
+        zones.update({z: i.volume for z, i in layout.zones.items() if i.present and z != "main"})
+    doc["described"] = layout is not None
+    doc["zones"] = {
+        z: {"label": ZONE_LABELS[z], "volume_control": control, "volume_cap": settings.cap(z)}
+        for z, control in zones.items()
+    }
+    names = {code: name for name, code in NET_SERVICE_CODES.items()}
+    doc["net_services"] = (
+        [{"code": c, "receiver_name": n, "name": names.get(c)} for c, n in sorted(layout.net_services.items())]
+        if layout is not None
+        else None
+    )
+    return doc
+
+
+@mcp.resource(
+    "onkyo://receivers",
+    name="receivers",
+    title="Configured receivers, their zones, volume caps and network services",
+    mime_type="application/json",
+)
+async def receivers_resource() -> str:
+    reg = registry()
+    docs = [await _receiver_doc(r, reg.settings) for r in reg.all()]
+    note = (
+        None
+        if docs
+        else "No receivers are configured: tools use the one receiver that answers discovery "
+        "(call discover_receivers to see what answers)."
+    )
+    return json.dumps({"dry_run": reg.settings.dry_run, "receivers": docs, "note": note}, indent=1)
+
+
+@mcp.resource(
+    "onkyo://receivers/{receiver}",
+    name="receiver",
+    title="One receiver's zones, volume caps and network services",
+    mime_type="application/json",
+)
+async def receiver_resource(receiver: str) -> str:
+    from urllib.parse import unquote
+
+    from mcp.server.mcpserver.exceptions import ResourceNotFoundError
+
+    reg = registry()
+    # pick() applies the same rules as the tools: a name or an address, never a guess.
+    # Its ReceiverError is a ToolError, which a resource read would report as an
+    # opaque internal error; ResourceNotFoundError keeps the message (and the
+    # JSON-RPC code says "bad params" rather than "server bug").
+    try:
+        r = await reg.pick(unquote(receiver))
+    except ReceiverError as exc:
+        raise ResourceNotFoundError(str(exc)) from exc
+    return json.dumps(await _receiver_doc(r, reg.settings), indent=1)
+
+
+# ---------------------------------------------------------------------------
+# Prompts: workflows the *user* picks (e.g. as /mcp__onkyo__play_music in
+# Claude Code). A prompt is just text with arguments filled in; the model then
+# carries it out with the tools, so each one names the tools in order and the
+# traps to watch for. They are deliberately about this server only: a
+# cross-device "movie night" (Harmony/Sofabaton activity, Shield app, Onkyo
+# input) is a README example, so no server depends on another being connected.
+# ---------------------------------------------------------------------------
+def _target(receiver: str, zone: str = "") -> str:
+    where = f"the receiver {receiver!r}" if receiver else "the receiver (ask me which if there are several)"
+    return f"{ZONE_LABELS.get(zone, zone)} of {where}" if zone and zone != "main" else where
+
+
+@mcp.prompt(title="Play music in a room")
+def play_music(room: str, service: str = "", station: str = "", volume: str = "") -> str:
+    """Turn on the zone for a room, switch it to the network player and start a service or station."""
+    want = f"{service} " if service else ""
+    want += f"station {station!r}" if station else "(whatever I choose; ask me if unsure)"
+    return (
+        f"Play {want} in the {room}. Please:\n"
+        f"1. Call get_status. Work out which receiver and zone is the {room!r} from the receiver names and "
+        "zones; if it's ambiguous, ask me instead of guessing.\n"
+        '2. If that zone is in standby, call set_power with state="on" (and its zone). A receiver can take '
+        "about 15 seconds after power-on before it accepts other commands; if one times out, wait and retry.\n"
+        '3. Call set_input with source="net" for that zone.\n'
+        + (
+            f"4. Call select_net_service with service={service!r}. If it says the service needs signing in, "
+            "stop and tell me.\n"
+            if service
+            else "4. If I didn't name a service, call list_net_services and ask me which.\n"
+        )
+        + (
+            f"5. Call list_stations, then play_station with the closest match to {station!r}.\n"
+            if station
+            else "5. If the service has stations, call list_stations and play_station with the one I want.\n"
+        )
+        + (f"6. Call set_volume with level={volume} for that zone.\n" if volume else "6. Leave the volume alone.\n")
+        + "7. Tell me what's playing (get_now_playing), and repeat any warning the tools gave: a receiver has "
+        'one network player, so every zone on "net" hears the same thing.'
+    )
+
+
+@mcp.prompt(title="Set up for a movie")
+def movie_night(receiver: str = "", source: str = "", listening_mode: str = "", volume: str = "") -> str:
+    """The receiver's part of a movie night: main zone on, the video input, a surround mode, a sensible volume."""
+    return (
+        f"Get {_target(receiver)} ready for a movie. Please:\n"
+        "1. Call get_status for it and note the main zone's power, input and listening mode.\n"
+        '2. If the main zone is in standby, call set_power with state="on". Allow ~15 seconds before the next '
+        "command if it was off.\n"
+        + (
+            f"3. Call set_input with source={source!r}.\n"
+            if source
+            else "3. Keep the current input if it's a video source (bd-dvd, strm-box, cbl-sat, game, tv); "
+            "otherwise ask me which input the player is on. Don't guess the wiring.\n"
+        )
+        + (
+            f"4. Call set_listening_mode with mode={listening_mode!r}.\n"
+            if listening_mode
+            else "4. Leave the listening mode as it is unless I asked for one.\n"
+        )
+        + (
+            f"5. Call set_volume with level={volume}.\n"
+            if volume
+            else "5. Leave the volume where it is, and tell me its level.\n"
+        )
+        + "6. Summarize the main zone's final state. Don't touch other zones."
+    )
+
+
+@mcp.prompt(title="Turn everything off")
+def all_off(receiver: str = "") -> str:
+    """Put every zone that is on into standby, then confirm."""
+    where = f"the receiver {receiver!r}" if receiver else "every configured receiver"
+    status = (
+        f"get_status with receiver={receiver!r}" if receiver else "get_status (without a receiver: it covers them all)"
+    )
+    return (
+        f"Turn off every zone of {where}. Please:\n"
+        f"1. Call {status}.\n"
+        '2. For each zone whose power is "on", call set_power with state="off", that receiver and that zone. '
+        "Turn each zone off separately: don't assume the main zone takes the others with it.\n"
+        "3. Call get_status again and tell me which zones are now in standby. Some receivers take up to 10 "
+        "seconds to confirm standby; a timeout on power-off is worth one retry, not more."
+    )
