@@ -59,3 +59,40 @@ def test_every_fixture_says_where_it_came_from():
     for path in FIXTURES:
         fixture = json.loads(path.read_text())
         assert fixture["source"] and fixture["description"] and fixture["assumptions"], path.name
+
+
+# --- captured transcripts: the path from a --debug log to a fixture -----------------------
+async def test_a_debug_log_becomes_a_fixture_that_replays(fake, configure, caplog):
+    """What HARDWARE_VALIDATION.md asks for: capture a call on hardware with
+    --debug, convert it, and it replays. Here the "hardware" is the fake."""
+    import logging
+
+    from onkyo_mcp.sim.transcript import from_log
+
+    from .conftest import settings_for
+
+    fake.state["ZPW"] = "01"  # Zone 2 on
+    configure(settings_for(fake, names=("Family Room",)))
+    with caplog.at_level(logging.DEBUG, logger="onkyo_mcp"):
+        async with Client(server.mcp) as c:
+            live = await c.call_tool("set_volume", {"level": 30, "zone": "zone2", "receiver": "Family Room"})
+    fixture = from_log(caplog.text)
+    assert fixture["tool"] == "set_volume" and fixture["args"] == {"level": 30, "zone": "zone2"}
+    assert [e["send"] for e in fixture["exchanges"]][-1] == "ZVL3C"
+
+    replay = await ReplayReceiver(fixture["exchanges"]).start()
+    try:
+        configure(Settings(receivers=(ReceiverSettings(replay.host, None, replay.port),), timeout=0.3))
+        async with Client(server.mcp) as c:
+            replayed = await c.call_tool(fixture["tool"], fixture["args"])
+    finally:
+        await replay.stop()
+    assert replay.mismatches == [] and replay.finished
+    assert replayed.structured_content["detail"] == live.structured_content["detail"]
+
+
+def test_a_log_without_a_tool_call_is_refused():
+    from onkyo_mcp.sim.transcript import from_log
+
+    with pytest.raises(ValueError, match="--debug"):
+        from_log("eISCP -> x.x.x.147 PWRQSTN\n")

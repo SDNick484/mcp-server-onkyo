@@ -2,14 +2,18 @@
 
 First contact with a receiver (or a new network) fails in a handful of ways,
 and "it doesn't work" doesn't say which. So each receiver is checked one
-layer at a time, and the first failure says what it means and what to try:
+layer at a time, and the first failure says what it means and what to try,
+pointing at the HARDWARE_VALIDATION.md step that covers it (STEP below):
 
-  1. config     - config.json parses; hosts and limits are valid (Settings.problems)
-  2. tcp        - something accepts a connection on the receiver's eISCP port (O-FRAMING)
-  3. eiscp      - it answers a power query (PWRQSTN) in the expected framing (O-PUSHES)
-  4. describe   - it describes itself (NRIQSTN): model, zones, services (O-NRI-ZONES, O-NRI-SERVICES)
-  5. zones      - each zone it lists answers a power query
-  6. discovery  - (once) a discovery broadcast is answered, and by whom (O-DISCOVERY)
+  config     - config.json parses; hosts and limits are valid (Settings.problems)
+  tcp        - something accepts a connection on the receiver's eISCP port (O-FRAMING)
+  eiscp      - it answers a power query (PWRQSTN) in the expected framing (O-PUSHES)
+  describe   - it describes itself (NRIQSTN): model, zones, services (O-NRI-ZONES, O-NRI-SERVICES)
+  zones      - each zone it lists answers a power query
+  discovery  - (once) a discovery broadcast is answered, and by whom (O-DISCOVERY)
+
+The layers aren't numbered in the output, so they can't be confused with
+the validation steps.
 
 Nothing here changes anything: every command is a query. `--dump DIR` also
 writes each receiver's raw replies (NRI XML, per-zone answers) to
@@ -215,7 +219,7 @@ async def run_doctor(settings: Settings, timeout: float = 5.0, dump: Path | None
 def render(report: Report, redacted: bool = True) -> str:
     lines = ["mcp-server-onkyo doctor", ""]
     lines += [f"  {k}: {v}" for k, v in report.versions.items()]
-    lines += ["", "1. config"]
+    lines += ["", "Config"]
     lines += [f"   x {p}" for p in report.config_problems] or ["   ok"]
     if report.dry_run:
         lines.append("   note: dry run is on (ONKYO_DRY_RUN): setters will send nothing")
@@ -228,7 +232,7 @@ def render(report: Report, redacted: bool = True) -> str:
                 lines.append(f"      -> {c.hint}")
         if r.dumped_to:
             lines.append(f"   raw replies written to {r.dumped_to}")
-    lines += ["", "6. discovery (UDP broadcast)"]
+    lines += ["", "Discovery (UDP broadcast)"]
     lines += [f"   {d}" for d in report.discovery] or [
         "   nothing answered: broadcasts may be filtered here (WSL2 NAT, Wi-Fi isolation, VLANs). Configured "
         "receivers still work by address. (HARDWARE_VALIDATION.md step 1)"
