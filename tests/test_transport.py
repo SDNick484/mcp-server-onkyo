@@ -26,10 +26,17 @@ async def test_send_without_expect_returns_none(fake: FakeReceiver):
     assert await send(fake.host, fake.port, "AMT01") is None
 
 
-async def test_setter_in_standby_times_out(fake: FakeReceiver):
+async def test_setter_in_standby_times_out_on_a_silent_receiver(fake: FakeReceiver):
+    fake.standby = "silent"  # TX-NR7100
     fake.state["PWR"] = "00"
     with pytest.raises(TimeoutError):
         await send(fake.host, fake.port, "MVL20", expect="MVL", timeout=0.3)
+
+
+async def test_setter_in_standby_answers_na_on_a_tx_nr6050(fake: FakeReceiver):
+    fake.state["PWR"] = "00"
+    assert await send(fake.host, fake.port, "MVL20", expect="MVL", timeout=0.3) == "N/A"
+    assert await send(fake.host, fake.port, "SLI2B", expect="SLI", timeout=0.3) == "2B"  # inputs still change
 
 
 async def test_unreachable_raises_connection_error():

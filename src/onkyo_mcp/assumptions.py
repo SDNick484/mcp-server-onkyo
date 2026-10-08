@@ -63,11 +63,13 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     ),
     Assumption(
         "O-STANDBY-SILENT",
-        "A zone in standby answers queries but ignores setters without replying (not even N/A).",
-        "observed on a TX-NR7100",
+        "A zone in standby answers queries. Its setters get one of two behaviors: no reply at all (TX-NR7100), "
+        "or input changes accepted and N/A for volume and mute (TX-NR6050). Either way the server asks the zone's "
+        "power to explain the failure.",
+        "observed on a TX-NR7100 and a TX-NR6050",
         "high",
         "hardware-verified",
-        "TX-NR7100; the TX-NR6050 answers N/A to volume/mute in standby",
+        "TX-NR7100 silent; TX-NR6050 Zone 2 took SLZ in standby and answered N/A to ZVL/ZMT",
     ),
     Assumption(
         "O-MULTI-COMMAND",

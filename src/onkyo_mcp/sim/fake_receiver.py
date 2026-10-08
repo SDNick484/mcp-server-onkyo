@@ -14,8 +14,10 @@ It speaks enough eISCP to exercise the server:
 - its own description (NRIQSTN) and discovery (UDP ECNQSTN);
 - an unsolicited status message before every reply, the way real receivers
   push status, so the server's reply matching is exercised;
-- in standby, a zone answers queries but ignores every other command for that
-  zone except power, with no reply at all, like a real TX-NR7100.
+- in standby, a zone answers queries, and its setters get one of the two
+  behaviors seen on hardware (``FakeReceiver.standby``): "silent", no reply at
+  all, like a TX-NR7100; or "na", input changes accepted and other setters
+  answered N/A, like a TX-NR6050. ``make()`` gives each model its own.
 
 Everything here is modelled on traffic seen from a TX-NR6050 and TX-NR7100,
 or on the onkyo-eiscp command tables where noted. It is a *simulator*:
@@ -39,7 +41,7 @@ import logging
 import socket
 import struct
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 log = logging.getLogger("onkyo_mcp.sim")
 
@@ -80,6 +82,7 @@ MENUS: dict[str, list[tuple[Any, ...]]] = {
 }
 TRACKS = ["Black", "Interstate Love Song", "Garden"]  # what "next" steps through
 # Which power command each setting belongs to
+INPUT_CODES = ("SLI", "SLZ", "SL3")
 ZONE_POWER = {"MVL": "PWR", "AMT": "PWR", "SLI": "PWR", "LMD": "PWR", "ZVL": "ZPW", "ZMT": "ZPW", "SLZ": "ZPW"}
 
 
@@ -162,6 +165,9 @@ class FakeReceiver:
         self.model, self.mac, self.region, self.host = model, mac, region, host
         self.state = default_state(model) if state is None else state
         self.faults = Faults()
+        # How a zone in standby answers setters (ASSUMPTION O-STANDBY-SILENT):
+        # "silent" (TX-NR7100) or "na" (TX-NR6050: inputs change, the rest is N/A)
+        self.standby: Literal["silent", "na"] = "silent"
         self.selected: list[int] = []  # NLSI positions played, for tests to check
         self.received: list[str] = []  # every command, in order
         self.connections = 0  # open right now
@@ -299,8 +305,12 @@ class FakeReceiver:
         if code not in state:
             return out + packet(f"{code}N/A")
         if code in ZONE_POWER and state[ZONE_POWER[code]] == "00" and param != "QSTN":
-            log.debug("   (in standby: ignored, no reply)")
-            return out
+            if self.standby == "silent":
+                log.debug("   (in standby: ignored, no reply)")
+                return out
+            if code not in INPUT_CODES:
+                log.debug("   (in standby: N/A)")
+                return out + packet(f"{code}N/A")
         if param != "QSTN":
             state[code] = param
         log.debug("-> %s%s", code, state[code])
@@ -347,6 +357,9 @@ PROFILES: dict[str, dict[str, Any]] = {
 
 def make(model: str, host: str = "127.0.0.1") -> FakeReceiver:
     fake = FakeReceiver(model=model, mac=PROFILES.get(model, {}).get("mac", "0009B0000000"), host=host)
+    # Seen on the owner's receivers: the TX-NR6050's zones in standby accept an
+    # input change and answer N/A to volume and mute; the TX-NR7100 says nothing.
+    fake.standby = "na" if model == "TX-NR6050" else "silent"
     if model == "TX-NR7100":
         fake.state["NRI"] = nri_xml(model, zone2=True, zone2_volume=False)
     return fake

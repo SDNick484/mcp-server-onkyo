@@ -222,9 +222,12 @@ async def test_no_traffic_logged_by_default(client, receiver, caplog):
     assert not [r for r in caplog.records if r.name.startswith("onkyo_mcp")]
 
 
-async def test_setter_in_standby_says_so(client, receiver):
-    # Like a TX-NR7100, the fake ignores setters in standby without replying.
-    # The model must hear why, not just "Error executing tool set_volume".
+@pytest.mark.parametrize("style", ["silent", "na"])
+async def test_setter_in_standby_says_so(client, receiver, fake, style):
+    # In standby a TX-NR7100 ignores setters without replying ("silent"); a
+    # TX-NR6050 answers volume and mute with N/A ("na"). ASSUMPTION O-STANDBY-SILENT.
+    # Either way the model must hear why, not just "Error executing tool set_volume".
+    fake.standby = style
     receiver["PWR"] = "00"
     result = await client.call_tool("set_volume", {"level": 20})
     assert result.is_error
@@ -281,7 +284,15 @@ async def test_zone2_on_net_at_capped_volume(client, receiver):
     assert (receiver["SLI"], receiver["MVL"], receiver["AMT"]) == ("10", "50", "00")
 
 
-async def test_zone2_in_standby_says_so(client, receiver):
+async def test_zone2_input_changes_in_standby_on_a_tx_nr6050(client, receiver):
+    # Seen on hardware: a TX-NR6050 changes a zone's input while it's in standby
+    result = await client.call_tool("set_input", {"source": "net", "zone": "zone2"})
+    assert text(result) == "Zone 2: Input is now net"
+    assert (receiver["ZPW"], receiver["SLZ"]) == ("00", "2B")
+
+
+async def test_zone2_in_standby_says_so(client, receiver, fake):
+    fake.standby = "silent"  # like a TX-NR7100
     result = await client.call_tool("set_input", {"source": "net", "zone": "zone2"})
     assert result.is_error
     assert (

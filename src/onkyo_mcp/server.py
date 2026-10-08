@@ -563,6 +563,22 @@ def zone_prefix(zone: Zone | None) -> str:
     return "" if zone in (None, "main") else f"{ZONE_LABELS[zone]}: "
 
 
+async def rejected(c: Call, zone: Zone, otherwise: str) -> ReceiverError:
+    """The error for a setter answered "N/A". Some receivers (TX-NR6050) answer
+    N/A, rather than nothing, to volume and mute while the zone is in standby
+    (ASSUMPTION O-STANDBY-SILENT), so ask the zone's power first: "turn it on"
+    is the actionable answer when that's the reason."""
+    code = ZONE_CODES[zone]["power"]
+    try:
+        power: str | None = await c.session.request(f"{code}QSTN", code)
+    except _READ_ERRORS:
+        power = None
+    if power == "00":
+        how = "set_power" if zone == "main" else f"set_power with zone={zone!r}"
+        return ReceiverError(f"{c.who(zone)} is in standby. Turn it on with {how} first.")
+    return ReceiverError(otherwise)
+
+
 # --- what a setter returns ---------------------------------------------------------------
 # Every tool that changes something returns an ActionResult (the same shape as
 # the sibling servers' results): structured, so a client can read `outcome`
@@ -645,9 +661,11 @@ async def set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zone: Zon
             return dry_run(c, zone, f"set {ZONE_LABELS[zone]} volume to {raw_to_volume(raw, c.steps)}", [code + raw])
         reply = await c.ask(code + raw, code, zone=zone)
         if reply == "N/A":
-            raise ReceiverError(
-                f"{zone_prefix(zone)}The receiver rejected the volume change. The zone may be off, or its volume "
-                "may be fixed in the receiver's setup (zones that feed another amplifier often are)."
+            raise await rejected(
+                c,
+                zone,
+                f"{zone_prefix(zone)}The receiver rejected the volume change. Its volume may be fixed in the "
+                "receiver's setup (zones that feed another amplifier often are).",
             )
         return result(c, zone, f"{zone_prefix(zone)}Volume is now {raw_to_volume(reply, c.steps)}", capped)
 
@@ -664,7 +682,7 @@ async def set_mute(muted: bool, receiver: ReceiverArg = None, zone: ZoneArg = "m
             return dry_run(c, zone, f"{'mute' if muted else 'unmute'} {ZONE_LABELS[zone]}", [command])
         reply = await c.ask(command, code, zone=zone)
         if reply == "N/A":
-            raise ReceiverError(f"{zone_prefix(zone)}The receiver rejected the mute change. Is the zone on?")
+            raise await rejected(c, zone, f"{zone_prefix(zone)}The receiver rejected the mute change.")
         return result(c, zone, zone_prefix(zone) + ("Muted" if reply == "01" else "Unmuted"))
 
 
@@ -674,7 +692,8 @@ async def set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg 
     room with zone="zone2" / "zone3". Names match the receiver's front-panel
     labels (e.g. "bd-dvd" for the BD/DVD input, "net" for network streaming).
     "same-as-main" (zone2/zone3 only) plays whatever the main zone is playing.
-    The zone must be on."""
+    Some receivers only change a zone's input while it is on; turn it on
+    first if this says it's in standby."""
     if source == "same-as-main" and zone == "main":
         raise ReceiverError('"same-as-main" only applies to zone2 and zone3.')
     async with call(receiver) as c:
