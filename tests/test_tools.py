@@ -106,17 +106,18 @@ async def test_set_volume(client, receiver):
 
 async def test_set_volume_capped(client, receiver):
     result = await client.call_tool("set_volume", {"level": 90})
-    assert text(result) == "Volume is now 75.0 (requested 90.0, capped at 75.0)"
+    assert text(result) == "Volume is now 75.0 (requested 90, capped at 75)"
     assert receiver["MVL"] == "96"  # raw 0x96 = 75.0, never above the cap
 
 
 async def test_set_volume_rejected_by_receiver(client, receiver):
     # Some receivers answer "MVLN/A" when they can't take a command. The fake
-    # does the same for any command it doesn't know.
+    # does the same for any command it doesn't know. A rejection is an error
+    # (isError), so the model can't mistake it for success.
     del receiver["MVL"]
     result = await client.call_tool("set_volume", {"level": 20})
-    assert not result.is_error
-    assert "rejected" in text(result)
+    assert result.is_error
+    assert "rejected the volume change" in text(result)
 
 
 async def test_set_input(client, receiver):
@@ -126,7 +127,8 @@ async def test_set_input(client, receiver):
 
 async def test_set_input_rejected_by_receiver(client, receiver):
     del receiver["SLI"]
-    assert "rejected" in text(await client.call_tool("set_input", {"source": "tv"}))
+    result = await client.call_tool("set_input", {"source": "tv"})
+    assert result.is_error and "rejected input 'tv'" in text(result)
 
 
 async def test_set_input_invalid_name_never_reaches_receiver(client, receiver):
@@ -144,7 +146,7 @@ async def test_set_listening_mode(client, receiver):
 async def test_set_listening_mode_rejected_by_receiver(client, receiver):
     del receiver["LMD"]  # e.g. DTS Neural:X requested on a signal that can't use it
     result = await client.call_tool("set_listening_mode", {"mode": "dts-neural-x"})
-    assert "rejected" in text(result)
+    assert result.is_error and "rejected listening mode" in text(result)
 
 
 async def test_set_listening_mode_invalid_name(client, receiver):
@@ -226,7 +228,7 @@ async def test_zone2_on_net_at_capped_volume(client, receiver):
     )
     assert text(await client.call_tool("set_input", {"source": "net", "zone": "zone2"})) == "Zone 2: Input is now net"
     result = await client.call_tool("set_volume", {"level": 90, "zone": "zone2"})
-    assert text(result) == "Zone 2: Volume is now 75.0 (requested 90.0, capped at 75.0)"
+    assert text(result) == "Zone 2: Volume is now 75.0 (requested 90, capped at 75)"
     assert text(await client.call_tool("set_mute", {"muted": True, "zone": "zone2"})) == "Zone 2: Muted"
     assert (receiver["ZPW"], receiver["SLZ"], receiver["ZVL"], receiver["ZMT"]) == ("01", "2B", "96", "01")
     # The main zone is untouched
@@ -334,7 +336,7 @@ async def test_now_playing_track_with_accents(client, receiver):
 async def test_mute_rejected_is_not_reported_as_unmuted(client, receiver):
     del receiver["AMT"]  # the fake answers N/A, as a TX-NR7100 zone 3 in standby did
     result = await client.call_tool("set_mute", {"muted": True})
-    assert "rejected" in text(result)
+    assert result.is_error and "rejected the mute change" in text(result)
 
 
 async def test_list_stations_only_music(client, receiver):
@@ -475,3 +477,56 @@ async def test_long_lists_are_read_in_pages(client, receiver):
         "play_station", {"station": "Track 237", "service": "music-server", "folder": ["Album", "Album 237"]}
     )
     assert text(result) == "Playing Track 237 on music-server"
+
+
+async def test_volume_cap_off_the_step_grid_is_never_exceeded(fake, configure):
+    # ONKYO_MAX_VOLUME=60.3 on a 0.5-step receiver: 60.3 isn't a step, and
+    # rounding to the nearest one (60.5) used to overshoot it.
+    configure(settings_for(fake, max_volume={"main": 60.3, "zone2": 60.3, "zone3": 60.3}))
+    async with Client(server.mcp) as c:
+        result = await c.call_tool("set_volume", {"level": 100})
+    assert text(result) == "Volume is now 60.0 (requested 100, capped at 60.3)"
+    assert fake.state["MVL"] == "78"  # 120 raw = 60.0, the highest step at or below 60.3
+
+
+@pytest.mark.parametrize("level, shown", [(30.25, 30.5), (30.75, 31.0), (31.25, 31.5), (30.1, 30.0), (30.3, 30.5)])
+async def test_volume_rounds_to_the_nearest_step_halves_up(client, level, shown):
+    assert text(await client.call_tool("set_volume", {"level": level})) == f"Volume is now {shown}"
+
+
+async def test_volume_outside_0_to_100_is_rejected_by_the_schema(client, receiver):
+    for level in (-5, 150):
+        result = await client.call_tool("set_volume", {"level": level})
+        assert result.is_error
+    assert receiver["MVL"] == "50"  # nothing sent
+    schema = {t.name: t for t in (await client.list_tools()).tools}["set_volume"].input_schema
+    assert (schema["properties"]["level"]["minimum"], schema["properties"]["level"]["maximum"]) == (0, 100)
+
+
+async def test_per_zone_cap(fake, configure):
+    configure(settings_for(fake, max_volume={"main": 75.0, "zone2": 45.0, "zone3": 75.0}))
+    fake.state["ZPW"] = "01"
+    async with Client(server.mcp) as c:
+        zone2 = await c.call_tool("set_volume", {"level": 60, "zone": "zone2"})
+        main = await c.call_tool("set_volume", {"level": 60})
+    assert text(zone2) == "Zone 2: Volume is now 45.0 (requested 60, capped at 45)"
+    assert text(main) == "Volume is now 60.0"
+
+
+async def test_browsing_another_service_while_one_plays_is_refused(client, receiver, fake):
+    await client.call_tool("play_station", {"station": "Shuffle"})  # Pandora playing
+    result = await client.call_tool("list_stations", {"service": "tunein"})
+    assert result.is_error and "pandora is playing. Browsing tunein would stop it" in text(result)
+    assert receiver["NLT"].startswith("04")  # still on Pandora: nothing was switched
+    ok = await client.call_tool("list_stations", {"service": "tunein", "interrupt": True})
+    assert not ok.is_error
+    # Browsing the playing service itself is always fine
+    await client.call_tool("play_station", {"station": "Shuffle"})
+    assert not (await client.call_tool("list_stations", {"service": "pandora"})).is_error
+
+
+async def test_garbled_menu_list_is_a_readable_error(client, receiver, fake):
+    fake.faults.garble.add("NLA")
+    result = await client.call_tool("list_stations", {"service": "pandora"})
+    assert result.is_error
+    assert "couldn't be read" in text(result)

@@ -316,6 +316,10 @@ ReceiverArg = Annotated[
     ),
 ]
 
+# Constraints in the type become JSON Schema the model sees ("minimum": 0,
+# "maximum": 100), and the SDK rejects anything outside before our code runs.
+VolumeLevel = Annotated[float, Field(ge=0, le=100, description="Volume on the front panel's 0-100 scale.")]
+
 # Optional too, defaulting to the main zone (the room the receiver is in)
 ZoneArg = Annotated[
     Zone,
@@ -430,26 +434,26 @@ async def set_power(on: bool, receiver: ReceiverArg = None, zone: ZoneArg = "mai
 
 
 @mcp.tool(title="Set volume", annotations=SETTER)
-async def set_volume(level: float, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> str:
+async def set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> str:
     """Set the volume of any zone: the main zone by default, or another room
     with zone="zone2" / "zone3". Uses the receiver's 0-100 display scale (0.5
-    steps on newer models), the same for every zone. Values above the
-    configured safety cap are clamped; the cap applies to every zone."""
+    steps on newer models), the same for every zone. Each zone has a safety
+    cap set by the owner (get_status shows it); a higher level is lowered to
+    the cap, and the reply says so."""
     async with call(receiver) as c:
         await check_zone(c, zone, volume=True)
         cap = c.settings.cap(zone)
-        clamped = max(0.0, min(level, cap))
         code = ZONE_CODES[zone]["volume"]
-        reply = await c.ask(f"{code}{volume_to_raw(clamped, c.steps)}", code, zone=zone)
+        reply = await c.ask(f"{code}{volume_to_raw(level, c.steps, cap)}", code, zone=zone)
         steps = c.steps
     if reply == "N/A":
-        return (
-            f"{zone_prefix(zone)}Receiver rejected the volume change. The zone may be "
-            "off, or its volume may be fixed in the receiver's setup (zones that "
-            "feed another amplifier often are)."
+        raise ReceiverError(
+            f"{zone_prefix(zone)}The receiver rejected the volume change. The zone may be off, or its volume "
+            "may be fixed in the receiver's setup (zones that feed another amplifier often are)."
         )
-    note = f" (requested {level}, capped at {cap})" if clamped != level else ""
-    return f"{zone_prefix(zone)}Volume is now {raw_to_volume(reply, steps)}{note}"
+    now = raw_to_volume(reply, steps)
+    note = f" (requested {level:g}, capped at {cap:g})" if level > cap else ""
+    return f"{zone_prefix(zone)}Volume is now {now}{note}"
 
 
 @mcp.tool(title="Set mute", annotations=SETTER)
@@ -461,7 +465,7 @@ async def set_mute(muted: bool, receiver: ReceiverArg = None, zone: ZoneArg = "m
         code = ZONE_CODES[zone]["mute"]
         reply = await c.ask(f"{code}01" if muted else f"{code}00", code, zone=zone)
     if reply == "N/A":
-        return f"{zone_prefix(zone)}Receiver rejected the mute change (is the zone on?)"
+        raise ReceiverError(f"{zone_prefix(zone)}The receiver rejected the mute change. Is the zone on?")
     return zone_prefix(zone) + ("Muted" if reply == "01" else "Unmuted")
 
 
@@ -479,7 +483,10 @@ async def set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg 
         code = ZONE_CODES[zone]["input"]
         reply = await c.ask(f"{code}{SOURCE_CODES[source]}", code, zone=zone)
     if reply == "N/A":
-        return f"{zone_prefix(zone)}Receiver rejected input {source!r} (is it powered on?)"
+        raise ReceiverError(
+            f"{zone_prefix(zone)}The receiver rejected input {source!r}. Is the zone on, and does this model "
+            "have that input?"
+        )
     return f"{zone_prefix(zone)}Input is now {CODE_SOURCES.get(reply, f'{code}{reply}')}"
 
 
@@ -493,7 +500,10 @@ async def set_listening_mode(mode: ListeningMode, receiver: ReceiverArg = None) 
     async with call(receiver) as c:
         reply = await c.ask(f"LMD{MODE_CODES[mode]}", "LMD")
     if reply == "N/A":
-        return f"Receiver rejected listening mode {mode!r} (powered off, or not available for this signal?)"
+        raise ReceiverError(
+            f"The receiver rejected listening mode {mode!r}: it may be off, or the mode may not suit the "
+            "current input signal (e.g. dts-neural-x on a PCM stereo source)."
+        )
     return f"Listening mode is now {CODE_MODES.get(reply, f'LMD{reply}')}"
 
 
@@ -588,7 +598,10 @@ async def read_list(c: Call, nlt: str) -> list[Item]:
     """Every item of the menu the receiver is showing. `nlt` is its NLT title
     info: service (2), UI type, layer type, cursor (4 hex), item count (4 hex),
     layer number (2 hex), ..."""
-    count, layer = min(int(nlt[8:12], 16), 0xFFF), nlt[12:14]
+    try:
+        count, layer = min(int(nlt[8:12], 16), 0xFFF), nlt[12:14]
+    except ValueError:
+        raise ReceiverError(f"The receiver described its menu in a way this server can't read ({nlt!r}).") from None
     items: list[Item] = []
     # In pages: a TX-NR6050 takes 5.3s to send 700 albums in one reply (over
     # the timeout), but 0.3s per 100.
@@ -598,7 +611,10 @@ async def read_list(c: Call, nlt: str) -> list[Item]:
         reply = await c.ask(f"NLAL0001{layer}{start:04X}{min(LIST_PAGE, count - start):04X}", "NLAX")
         if reply[4:5] != "S":  # "0001S000<?xml..." = success
             raise ReceiverError("The receiver couldn't list this menu.")
-        page = ElementTree.fromstring(reply[8:]).iter("item")
+        try:
+            page = ElementTree.fromstring(reply[8:]).iter("item")
+        except ElementTree.ParseError as exc:
+            raise ReceiverError(f"The receiver sent a menu list that isn't valid XML ({exc}).") from None
         items += [
             (position, item.get("icontype", ""), item.get("title", ""))
             for position, item in enumerate(page, start=start + 1)
@@ -677,19 +693,49 @@ FolderPath = Annotated[
 LIST_LIMIT = 300  # names per kind; a music server's Album folder can hold thousands
 
 
+Interrupt = Annotated[
+    bool,
+    Field(
+        description="Browse even though it stops what another service is playing. Ask the user first; "
+        "without it, this refuses rather than stop the music."
+    ),
+]
+
+
+async def playing_service(c: Call) -> str | None:
+    """The network service that is playing right now (by code), or None if
+    nothing plays. NMS ends with the service's icon code; NST starts with "P"
+    while playing."""
+    state = await c.ask("NSTQSTN", "NST")
+    if not state.startswith("P"):
+        return None
+    status = await c.ask("NMSQSTN", "NMS")
+    return status[-2:] if len(status) >= 2 else None
+
+
 @mcp.tool(title="List stations", annotations=SETTER)
 async def list_stations(
-    service: NetService = "pandora", folder: FolderPath = (), receiver: ReceiverArg = None
+    service: NetService = "pandora",
+    folder: FolderPath = (),
+    receiver: ReceiverArg = None,
+    interrupt: Interrupt = False,
 ) -> dict[str, Any]:
     """Browse a network service: list what can be played (stations, tracks)
     and the folders at one level of its menu. Starts at the top (for Pandora:
     your stations); to look inside a folder, call again with its name added to
     `folder` (e.g. TuneIn: ["My Presets"]). Pass a playable name, with the
     same `folder`, to play_station. Browsing the service that's playing doesn't
-    interrupt it, but opening a different service stops the current music:
-    check get_now_playing first, and ask before browsing another service
-    while something plays."""
+    interrupt it. Opening a *different* service would stop the music, so that
+    is refused unless interrupt=true (ask the user first)."""
     async with call(receiver) as c:
+        code = NET_SERVICE_CODES[service]
+        playing = await playing_service(c)
+        if playing is not None and playing != code and not interrupt:
+            name = CODE_NET_SERVICES.get(playing, f"service {playing}")
+            raise ReceiverError(
+                f"{name} is playing. Browsing {service} would stop it. Ask the user, then call again with "
+                "interrupt=true, or wait until nothing plays."
+            )
         _, items = await open_menu(c, service, folder)
     # "M" = music, "0" = playing now, "F" = folder; anything else is a
     # message ("No Favorites available") or an account item ("Sign Out")

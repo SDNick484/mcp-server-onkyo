@@ -130,3 +130,15 @@ async def test_read_packet_rejects_bad_magic():
 
     with pytest.raises(ValueError, match="Bad magic"):
         await read_packet(await _stream(b"XSCP" + struct.pack(">IIB3x", 16, 2, 1) + b"!1"))
+
+
+@pytest.mark.parametrize("steps", [1, 2])
+@pytest.mark.parametrize("cap", [0.0, 37.3, 50.0, 60.3, 75.0, 100.0])
+def test_volume_never_exceeds_the_cap_and_lands_on_the_nearest_step(steps, cap):
+    # Every request from 0 to 100 in 0.05 steps
+    for i in range(0, 2001):
+        level = i / 20
+        shown = raw_to_volume(volume_to_raw(level, steps, cap), steps)
+        assert 0 <= shown <= cap, (level, cap)
+        if level <= cap - 1 / steps:  # far enough below the cap that clamping can't apply
+            assert abs(shown - level) <= 0.5 / steps + 1e-9, (level, shown)

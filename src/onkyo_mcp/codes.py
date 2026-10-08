@@ -10,6 +10,7 @@ assumptions.py.
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 # Input selector (SLI) codes, named after the TX-NR7100/6050 front-panel labels.
@@ -126,7 +127,23 @@ def raw_to_volume(raw: str, steps: int) -> float:
     return int(raw, 16) / steps
 
 
-def volume_to_raw(volume: float, steps: int) -> str:
-    # 40.0 -> 80 raw steps -> "50". round() snaps e.g. 40.3 to the nearest
-    # step the receiver supports; :02X is the two-digit uppercase hex it expects.
-    return f"{round(volume * steps):02X}"
+def to_steps(volume: float, steps: int) -> int:
+    """The nearest raw step, halves rounding up: 30.25 -> 61 (30.5), 30.75 -> 62 (31.0).
+
+    Not round(): Python rounds halves to the nearest *even* number, so 30.25
+    became 30.0 but 30.75 became 31.0, which reads as random to a person.
+    The small epsilon absorbs float error (30.25 * 2 can be 60.49999...).
+    """
+    return math.floor(volume * steps + 0.5 + 1e-9)
+
+
+def cap_steps(cap: float, steps: int) -> int:
+    """The highest raw step at or below the cap. Snapping *down* keeps a cap
+    that isn't on the step grid (60.3) from being exceeded by rounding (60.5)."""
+    return math.floor(cap * steps + 1e-9)
+
+
+def volume_to_raw(volume: float, steps: int, cap: float = 100.0) -> str:
+    """Display volume -> raw hex, clamped to 0..cap: 40.0 -> "50" with 2 steps.
+    :02X is the two-digit uppercase hex the receiver expects."""
+    return f"{max(0, min(to_steps(volume, steps), cap_steps(cap, steps))):02X}"
