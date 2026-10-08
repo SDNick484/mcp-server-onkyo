@@ -35,6 +35,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
+
 def setting(name: str, default: str) -> str:
     """An ONKYO_* environment variable, or `default` if it's unset *or empty*.
     Empty happens in practice: WSL turns a variable listed in WSLENV but not
@@ -87,12 +88,36 @@ def volume_to_raw(volume: float) -> str:
 # Input selector (SLI) codes, named after the TX-NR7100/6050 front-panel labels.
 # The Literal type becomes a JSON Schema "enum", so the model can only pick
 # one of these names. Keep the two in sync.
-Source = Literal["bd-dvd", "game", "cbl-sat", "strm-box", "pc", "aux", "tv",
-                 "phono", "cd", "fm", "am", "net", "bluetooth", "same-as-main"]
+Source = Literal[
+    "bd-dvd",
+    "game",
+    "cbl-sat",
+    "strm-box",
+    "pc",
+    "aux",
+    "tv",
+    "phono",
+    "cd",
+    "fm",
+    "am",
+    "net",
+    "bluetooth",
+    "same-as-main",
+]
 SOURCE_CODES: dict[str, str] = {
-    "bd-dvd": "10", "game": "02", "cbl-sat": "01", "strm-box": "11", "pc": "05",
-    "aux": "03", "tv": "12", "phono": "22", "cd": "23", "fm": "24", "am": "25",
-    "net": "2B", "bluetooth": "2E",
+    "bd-dvd": "10",
+    "game": "02",
+    "cbl-sat": "01",
+    "strm-box": "11",
+    "pc": "05",
+    "aux": "03",
+    "tv": "12",
+    "phono": "22",
+    "cd": "23",
+    "fm": "24",
+    "am": "25",
+    "net": "2B",
+    "bluetooth": "2E",
     "same-as-main": "80",  # zones 2/3 only: play whatever the main zone plays
 }
 # Reverse lookup, for turning the receiver's replies back into names
@@ -101,13 +126,32 @@ CODE_SOURCES = {code: name for name, code in SOURCE_CODES.items()}
 # Listening mode (LMD) codes. Several codes have older and newer meanings in
 # onkyo-eiscp's table (80 = PLII Movie / Dolby Surround, 82 = Neo:6 Cinema /
 # DTS Neural:X, 03 = Film / Game-RPG); these names are the 2021-model ones.
-ListeningMode = Literal["stereo", "direct", "pure-audio", "all-ch-stereo", "full-mono",
-                        "theater-dimensional", "dolby-surround", "dts-neural-x",
-                        "game-rpg", "game-action", "game-rock", "game-sports"]
+ListeningMode = Literal[
+    "stereo",
+    "direct",
+    "pure-audio",
+    "all-ch-stereo",
+    "full-mono",
+    "theater-dimensional",
+    "dolby-surround",
+    "dts-neural-x",
+    "game-rpg",
+    "game-action",
+    "game-rock",
+    "game-sports",
+]
 MODE_CODES: dict[str, str] = {
-    "stereo": "00", "direct": "01", "pure-audio": "11", "all-ch-stereo": "0C",
-    "full-mono": "13", "theater-dimensional": "0D", "dolby-surround": "80",
-    "dts-neural-x": "82", "game-rpg": "03", "game-action": "05", "game-rock": "06",
+    "stereo": "00",
+    "direct": "01",
+    "pure-audio": "11",
+    "all-ch-stereo": "0C",
+    "full-mono": "13",
+    "theater-dimensional": "0D",
+    "dolby-surround": "80",
+    "dts-neural-x": "82",
+    "game-rpg": "03",
+    "game-action": "05",
+    "game-rock": "06",
     "game-sports": "0E",
 }
 CODE_MODES = {code: name for name, code in MODE_CODES.items()}
@@ -118,26 +162,30 @@ CODE_MODES = {code: name for name, code in MODE_CODES.items()}
 # list them in their own description (NRIQSTN, <netservicelist>);
 # onkyo-eiscp's tables have TIDAL as 19, AirPlay as 18 and no Amazon Music.
 # All verified on a TX-NR6050. Most must be signed in on the receiver first.
-NetService = Literal["pandora", "spotify", "deezer", "tidal", "amazon-music", "airplay",
-                     "tunein", "music-server"]
+NetService = Literal["pandora", "spotify", "deezer", "tidal", "amazon-music", "airplay", "tunein", "music-server"]
 NET_SERVICE_CODES: dict[str, str] = {
-    "pandora": "04", "spotify": "0A", "deezer": "12", "tidal": "1B",
-    "amazon-music": "1C", "airplay": "44", "tunein": "0E", "music-server": "00",
+    "pandora": "04",
+    "spotify": "0A",
+    "deezer": "12",
+    "tidal": "1B",
+    "amazon-music": "1C",
+    "airplay": "44",
+    "tunein": "0E",
+    "music-server": "00",
 }
 CODE_NET_SERVICES = {code: name for name, code in NET_SERVICE_CODES.items()}
 # Other sources the network player can be playing (NMS service icons; AirPlay
 # shows as 18 there even though it is selected as 44)
 CODE_NET_SERVICES |= {"18": "airplay", "F0": "usb", "F1": "usb", "F4": "bluetooth"}
 # NST play state: first character of the reply ("Pxx1" = playing)
-PLAY_STATES = {"P": "playing", "p": "paused", "S": "stopped", "F": "fast-forward",
-               "R": "rewind", "E": "end"}
+PLAY_STATES = {"P": "playing", "p": "paused", "S": "stopped", "F": "fast-forward", "R": "rewind", "E": "end"}
 
 # Zones 2 and 3 drive speakers in other rooms. Each zone has its own power,
 # volume, mute and input, with its own 3-letter command for each. Volumes and
 # input codes use the same scale and table as the main zone.
 Zone = Literal["main", "zone2", "zone3"]
 ZONE_CODES: dict[str, dict[str, str]] = {
-    "main":  {"power": "PWR", "volume": "MVL", "mute": "AMT", "input": "SLI"},
+    "main": {"power": "PWR", "volume": "MVL", "mute": "AMT", "input": "SLI"},
     "zone2": {"power": "ZPW", "volume": "ZVL", "mute": "ZMT", "input": "SLZ"},
     "zone3": {"power": "PW3", "volume": "VL3", "mute": "MT3", "input": "SL3"},
 }
@@ -159,6 +207,7 @@ mcp = MCPServer("onkyo")
 # Responses look like "!1MVL28\x1a\r\n" (volume is hex: 0x28 = 40).
 # ---------------------------------------------------------------------------
 
+
 def build_packet(command: str, unit: str = "1") -> bytes:
     # unit "1" = receiver; "x" = any device type (used for discovery)
     data = f"!{unit}{command}\r".encode("ascii")
@@ -172,7 +221,7 @@ def decode_datagram(packet: bytes) -> str:
     magic, header_size, data_size, _version = struct.unpack(">4sIIB3x", packet[:16])
     if magic != b"ISCP":
         raise ValueError(f"Bad magic: {magic!r}")
-    data = packet[header_size:header_size + data_size]
+    data = packet[header_size : header_size + data_size]
     # Same stripping as read_packet, plus \x19, which can also turn up at
     # the end of a UDP reply.
     return data.decode("utf-8", "replace")[2:].rstrip("\x19\x1a\r\n")
@@ -203,15 +252,12 @@ async def discover(timeout: float = 3.0) -> list[dict]:
             # Pad with blanks so a reply with missing fields still unpacks
             model, port, region, mac = (msg[3:].split("/") + ["", "", "", ""])[:4]
             # "0009B0123456" -> "00:09:B0:12:34:56"
-            mac = ":".join(mac[i:i + 2] for i in range(0, 12, 2)) if len(mac) >= 12 else mac
-            found[addr[0]] = {"host": addr[0], "model": model, "port": int(port or 60128),
-                              "region": region, "mac": mac}
+            mac = ":".join(mac[i : i + 2] for i in range(0, 12, 2)) if len(mac) >= 12 else mac
+            found[addr[0]] = {"host": addr[0], "model": model, "port": int(port or 60128), "region": region, "mac": mac}
 
     loop = asyncio.get_running_loop()
     # Port 0 = let the OS pick a free local port; replies come back to it.
-    transport, _ = await loop.create_datagram_endpoint(
-        Listener, local_addr=("0.0.0.0", 0), allow_broadcast=True
-    )
+    transport, _ = await loop.create_datagram_endpoint(Listener, local_addr=("0.0.0.0", 0), allow_broadcast=True)
     try:
         log.debug("eISCP -> %s (UDP broadcast) ECNQSTN", DISCOVERY_ADDR)
         transport.sendto(build_packet("ECNQSTN", unit="x"), (DISCOVERY_ADDR, PORT))
@@ -236,9 +282,13 @@ async def read_packet(reader: asyncio.StreamReader) -> str:
     return data.decode("utf-8", "replace")[2:].rstrip("\x1a\r\n")
 
 
-async def send(command: str, expect: str | None = None, timeout: float | None = None,
-               host: str | None = None,
-               until: Callable[[str], bool] | None = None) -> str | None:
+async def send(
+    command: str,
+    expect: str | None = None,
+    timeout: float | None = None,
+    host: str | None = None,
+    until: Callable[[str], bool] | None = None,
+) -> str | None:
     """Send one command to `host` (default: ONKYO_HOST, required if unset). If `expect` is a
     3-char prefix (e.g. "MVL"), wait for the matching reply. The receiver also
     pushes unsolicited status messages, so we skip anything that doesn't match.
@@ -261,9 +311,7 @@ async def send(command: str, expect: str | None = None, timeout: float | None = 
         raise ValueError("no receiver address: pass host, or set ONKYO_HOST")
     timeout = timeout or TIMEOUT
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, PORT), timeout
-        )
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, PORT), timeout)
     except TimeoutError:
         # Re-raised as a different type, so callers can tell "couldn't
         # connect" apart from "connected, but no reply" (TimeoutError below).
@@ -274,15 +322,18 @@ async def send(command: str, expect: str | None = None, timeout: float | None = 
         await writer.drain()
         if expect is None:
             return None
-        sent_value = command[len(expect):]  # "AMT01" -> "01", "AMTQSTN" -> "QSTN"
+        sent_value = command[len(expect) :]  # "AMT01" -> "01", "AMTQSTN" -> "QSTN"
         is_setter = command.startswith(expect) and sent_value != "QSTN"
 
         async def wait_for_match() -> str:
             while True:
                 msg = await read_packet(reader)
-                value = msg[len(expect):]  # "MVL50" -> "50"
-                if (msg.startswith(expect) and (not is_setter or value in (sent_value, "N/A"))
-                        and (until is None or until(value))):
+                value = msg[len(expect) :]  # "MVL50" -> "50"
+                if (
+                    msg.startswith(expect)
+                    and (not is_setter or value in (sent_value, "N/A"))
+                    and (until is None or until(value))
+                ):
                     log.debug("eISCP <- %s %s", host, msg)
                     return value
                 log.debug("eISCP <- %s %s (unsolicited, skipped)", host, msg)
@@ -319,8 +370,7 @@ async def zone_layout(host: str) -> dict | None:
         for zone in root.iter("zone"):
             name = {"2": "zone2", "3": "zone3"}.get(zone.get("id", ""))
             if name:
-                zones[name] = {"present": zone.get("value") == "1",
-                               "volume": zone.get("volmax", "0") != "0"}
+                zones[name] = {"present": zone.get("value") == "1", "volume": zone.get("volmax", "0") != "0"}
         _layouts[key] = {"model": root.findtext(".//model") or "receiver", "zones": zones}
     return _layouts[key]
 
@@ -338,6 +388,7 @@ async def zone_layout(host: str) -> dict | None:
 # Using middleware instead of tapping stdin/stdout means it also works
 # unchanged on other transports (e.g. streamable HTTP).
 # ---------------------------------------------------------------------------
+
 
 def to_json(value) -> str:
     if isinstance(value, BaseModel):
@@ -392,19 +443,16 @@ READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 # back (not destructive), and sending "volume 30" twice leaves the receiver
 # exactly as sending it once (idempotent). Closed world: they only talk to a
 # receiver we were pointed at, not the wider internet.
-SETTER = ToolAnnotations(read_only_hint=False, destructive_hint=False,
-                         idempotent_hint=True, open_world_hint=False)
+SETTER = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 
 # Playback controls change state but aren't idempotent: "next" twice skips
 # two tracks.
-PLAYBACK = ToolAnnotations(read_only_hint=False, destructive_hint=False,
-                           idempotent_hint=False, open_world_hint=False)
+PLAYBACK = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 
 
 # Discovery reads nothing but replies, so it is read-only. It is open-world,
 # though: it broadcasts to the whole LAN and lists whatever answers.
-@mcp.tool(title="Discover receivers",
-          annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
+@mcp.tool(title="Discover receivers", annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
 async def discover_receivers() -> list[dict]:
     """Find Onkyo/Integra/Pioneer receivers on the local network. Returns each
     receiver's IP address, model, eISCP port and MAC address."""
@@ -414,10 +462,12 @@ async def discover_receivers() -> list[dict]:
 # Optional, so single-receiver setups (ONKYO_HOST, or one receiver found by
 # discovery) keep working unchanged.
 # The Field description lands in the tool's JSON Schema next to the type.
-Receiver = Annotated[str | None, Field(
-    description="IP address of the receiver, as returned by discover_receivers. "
-                "Omit to use the default receiver."
-)]
+Receiver = Annotated[
+    str | None,
+    Field(
+        description="IP address of the receiver, as returned by discover_receivers. Omit to use the default receiver."
+    ),
+]
 
 
 _discovered_host: str | None = None
@@ -433,21 +483,27 @@ async def resolve_host(receiver: str | None) -> str:
         found = await discover(timeout=2.0)
         if len(found) > 1:
             listing = ", ".join(f"{r['model']} at {r['host']}" for r in found)
-            raise ToolError(f"Several receivers found ({listing}): pass the one you "
-                            "want as receiver.")
+            raise ToolError(f"Several receivers found ({listing}): pass the one you want as receiver.")
         if not found:
-            raise ToolError("No receiver is configured and none answered discovery. "
-                            "Set ONKYO_HOST to the receiver's IP address (see the "
-                            "README: When discovery finds nothing).")
+            raise ToolError(
+                "No receiver is configured and none answered discovery. "
+                "Set ONKYO_HOST to the receiver's IP address (see the "
+                "README: When discovery finds nothing)."
+            )
         _discovered_host = found[0]["host"]
         log.info("Using %s at %s (found by discovery)", found[0]["model"], _discovered_host)
     return _discovered_host
 
 
-async def call_receiver(command: str, expect: str | None, receiver: str | None,
-                        timeout: float | None = None, zone: Zone = "main",
-                        no_reply: str | None = None,
-                        until: Callable[[str], bool] | None = None) -> str | None:
+async def call_receiver(
+    command: str,
+    expect: str | None,
+    receiver: str | None,
+    timeout: float | None = None,
+    zone: Zone = "main",
+    no_reply: str | None = None,
+    until: Callable[[str], bool] | None = None,
+) -> str | None:
     """send() for tools: turns network failures into a ToolError whose message
     tells the model what went wrong.
 
@@ -474,9 +530,11 @@ async def call_receiver(command: str, expect: str | None, receiver: str | None,
             # silence means it doesn't exist (TX-NR6050 zone 3), or isn't set
             # up (TX-NR7100 zone 3 answers queries but ignores power-on).
             label = ZONE_LABELS[zone]
-            raise ToolError(f"The receiver at {host} didn't answer for {label}: it doesn't "
-                            f"have {label}, or {label} isn't set up in its speaker "
-                            "configuration.") from exc
+            raise ToolError(
+                f"The receiver at {host} didn't answer for {label}: it doesn't "
+                f"have {label}, or {label} isn't set up in its speaker "
+                "configuration."
+            ) from exc
         if expect != power_code and not command.endswith("QSTN"):
             # A setter got no reply. A zone in standby still answers queries,
             # but some receivers (TX-NR7100) silently ignore setters, so ask
@@ -487,21 +545,27 @@ async def call_receiver(command: str, expect: str | None, receiver: str | None,
                 power = None
             if power == "00":
                 how = "set_power" if zone == "main" else f"set_power with zone={zone!r}"
-                raise ToolError(f"{who} is in standby. "
-                                f"Turn it on with {how} first.") from exc
-        raise ToolError(f"{who} didn't reply in time. If it was "
-                        "just turned on, it may still be starting up (some models take "
-                        "about 15 seconds): wait a few seconds and try again.") from exc
+                raise ToolError(f"{who} is in standby. Turn it on with {how} first.") from exc
+        raise ToolError(
+            f"{who} didn't reply in time. If it was "
+            "just turned on, it may still be starting up (some models take "
+            "about 15 seconds): wait a few seconds and try again."
+        ) from exc
     except OSError as exc:
-        raise ToolError(f"Can't connect to a receiver at {host} ({exc}). Check the "
-                        "IP address, and that the receiver is on the network.") from exc
+        raise ToolError(
+            f"Can't connect to a receiver at {host} ({exc}). Check the "
+            "IP address, and that the receiver is on the network."
+        ) from exc
 
 
 # Optional too, defaulting to the main zone (the room the receiver is in)
-ZoneArg = Annotated[Zone, Field(
-    description="Which zone: \"main\" is the room the receiver is in; \"zone2\" and "
-                "\"zone3\" are speakers in other rooms. Not every receiver has zone3."
-)]
+ZoneArg = Annotated[
+    Zone,
+    Field(
+        description='Which zone: "main" is the room the receiver is in; "zone2" and '
+        '"zone3" are speakers in other rooms. Not every receiver has zone3.'
+    ),
+]
 
 
 @mcp.tool(title="Get receiver status", annotations=READ_ONLY)
@@ -528,8 +592,7 @@ async def get_status(receiver: Receiver = None, zone: ZoneArg = "main") -> dict:
         "volume": raw_to_volume(volume) if volume and volume != "N/A" else None,
         "muted": mute == "01",
         # Unknown codes (not in our tables) are shown raw, e.g. "SLI2C"
-        "input": CODE_SOURCES.get(source, f"{codes['input']}{source}")
-                 if source and source != "N/A" else None,
+        "input": CODE_SOURCES.get(source, f"{codes['input']}{source}") if source and source != "N/A" else None,
     }
     if zone == "main":  # zones 2/3 have no surround processing
         mode = await call_receiver("LMDQSTN", "LMD", host)
@@ -575,8 +638,10 @@ async def check_zone(receiver: str | None, zone: Zone, volume: bool = False) -> 
     if not info["present"]:
         raise ToolError(f"The {layout['model']} at {host} has no {label}.")
     if volume and not info["volume"]:
-        raise ToolError(f"{label} of the {layout['model']} at {host} has no volume control "
-                        "(fixed-level output, or its outputs are used for other speakers).")
+        raise ToolError(
+            f"{label} of the {layout['model']} at {host} has no volume control "
+            "(fixed-level output, or its outputs are used for other speakers)."
+        )
 
 
 def zone_prefix(zone: Zone) -> str:
@@ -594,14 +659,15 @@ async def set_power(on: bool, receiver: Receiver = None, zone: ZoneArg = "main")
     await check_zone(receiver, zone)
     code = ZONE_CODES[zone]["power"]
     # Power changes are slow to confirm (a TX-NR7100 takes ~10s to reach standby)
-    reply = await call_receiver(f"{code}01" if on else f"{code}00", code, receiver,
-                                timeout=3 * TIMEOUT, zone=zone)
+    reply = await call_receiver(f"{code}01" if on else f"{code}00", code, receiver, timeout=3 * TIMEOUT, zone=zone)
     if reply == "N/A":
         raise ToolError(f"The receiver rejected the command: it may not have {ZONE_LABELS[zone]}.")
     if reply == "01":
         # The TX-NR7100 confirms power-on, then ignores commands for ~15s
-        return (f"{zone_prefix(zone)}Power is now on. Some receivers need about 15 "
-                "seconds to start up before they accept other commands.")
+        return (
+            f"{zone_prefix(zone)}Power is now on. Some receivers need about 15 "
+            "seconds to start up before they accept other commands."
+        )
     return f"{zone_prefix(zone)}Power is now standby"
 
 
@@ -616,9 +682,11 @@ async def set_volume(level: float, receiver: Receiver = None, zone: ZoneArg = "m
     code = ZONE_CODES[zone]["volume"]
     reply = await call_receiver(f"{code}{volume_to_raw(clamped)}", code, receiver, zone=zone)
     if reply == "N/A":
-        return (f"{zone_prefix(zone)}Receiver rejected the volume change. The zone may be "
-                "off, or its volume may be fixed in the receiver's setup (zones that "
-                "feed another amplifier often are).")
+        return (
+            f"{zone_prefix(zone)}Receiver rejected the volume change. The zone may be "
+            "off, or its volume may be fixed in the receiver's setup (zones that "
+            "feed another amplifier often are)."
+        )
     note = f" (requested {level}, capped at {MAX_VOLUME})" if clamped != level else ""
     return f"{zone_prefix(zone)}Volume is now {raw_to_volume(reply)}{note}"
 
@@ -680,9 +748,12 @@ async def select_net_service(service: NetService, receiver: Receiver = None) -> 
     # of its new menu: "NLT" + the service code + 20 status characters + the
     # service's name, e.g. "NLT0401000000480100FF0400Pandora".
     reply = await call_receiver(
-        f"NSV{code}0", f"NLT{code}", receiver,  # "0": no account details included
+        f"NSV{code}0",
+        f"NLT{code}",
+        receiver,  # "0": no account details included
         no_reply=f"The receiver didn't switch to {service}. It may not offer {service}, "
-                 "or it isn't signed in: check in the Onkyo Controller app.")
+        "or it isn't signed in: check in the Onkyo Controller app.",
+    )
     if reply[0] in "34":  # the screen is a popup or keyboard, not the service's menu
         raise ToolError(not_ready(service, reply[20:]))
     return f"Network service is now {reply[20:] or service}"
@@ -691,9 +762,11 @@ async def select_net_service(service: NetService, receiver: Receiver = None) -> 
 def not_ready(service: str, screen: str) -> str:
     # A signed-out service opens a popup instead of its menu: "TIDAL Login",
     # "Amazon Music Sign In", "Try Deezer Premium+" (no account)
-    return (f"{service} isn't ready: the receiver shows \"{screen}\". It needs "
-            "signing in (or a subscription), which you can do in the Onkyo "
-            "Controller app.")
+    return (
+        f'{service} isn\'t ready: the receiver shows "{screen}". It needs '
+        "signing in (or a subscription), which you can do in the Onkyo "
+        "Controller app."
+    )
 
 
 @mcp.tool(title="Get now playing", annotations=READ_ONLY)
@@ -756,13 +829,14 @@ async def read_list(host: str, nlt: str) -> list[Item]:
     for start in range(0, count, LIST_PAGE):
         # Expect "NLAX", not "NLA": send() would take "NLAL..." for a setter
         # and wait for it to be echoed back, which never happens.
-        reply = await call_receiver(
-            f"NLAL0001{layer}{start:04X}{min(LIST_PAGE, count - start):04X}", "NLAX", host)
+        reply = await call_receiver(f"NLAL0001{layer}{start:04X}{min(LIST_PAGE, count - start):04X}", "NLAX", host)
         if reply[4:5] != "S":  # "0001S000<?xml..." = success
             raise ToolError("The receiver couldn't list this menu.")
         page = ElementTree.fromstring(reply[8:]).iter("item")
-        items += [(position, item.get("icontype", ""), item.get("title", ""))
-                  for position, item in enumerate(page, start=start + 1)]
+        items += [
+            (position, item.get("icontype", ""), item.get("title", ""))
+            for position, item in enumerate(page, start=start + 1)
+        ]
     return items
 
 
@@ -770,20 +844,17 @@ def pick(wanted: str, items: list[Item], what: str) -> Item:
     """The item named `wanted`: an exact match (ignoring case), else the only
     one containing it. Duplicates (same title twice) count as one."""
     key = wanted.casefold().strip()
-    matches = ([i for i in items if i[2].casefold() == key]
-               or [i for i in items if key in i[2].casefold()])
+    matches = [i for i in items if i[2].casefold() == key] or [i for i in items if key in i[2].casefold()]
     names = list(dict.fromkeys(title for _, _, title in matches))
     if not names:
         available = ", ".join(dict.fromkeys(t for _, _, t in items[:30])) or "nothing"
-        raise ToolError(f"No {what} matching {wanted!r}. Here: {available}"
-                        + (" ..." if len(items) > 30 else "") + ".")
+        raise ToolError(f"No {what} matching {wanted!r}. Here: {available}" + (" ..." if len(items) > 30 else "") + ".")
     if len(names) > 1:
-        raise ToolError(f"{wanted!r} matches several {what}s: {', '.join(names[:10])}. "
-                        "Which one?")
+        raise ToolError(f"{wanted!r} matches several {what}s: {', '.join(names[:10])}. Which one?")
     return matches[0]
 
 
-async def open_menu(service: NetService, host: str, folder: list[str]) -> tuple[str, list[Item]]:
+async def open_menu(service: NetService, host: str, folder: tuple[str, ...]) -> tuple[str, list[Item]]:
     """Open a service's top menu, then each folder in `folder` in turn.
     Returns the NLT title info and items of the menu reached."""
     code = NET_SERVICE_CODES[service]
@@ -791,9 +862,12 @@ async def open_menu(service: NetService, host: str, folder: list[str]) -> tuple[
     # screen pushes "NLT<code>22..." while music plays, which isn't the menu.
     try:
         rest = await call_receiver(
-            f"NSV{code}0", f"NLT{code}01", host,
+            f"NSV{code}0",
+            f"NLT{code}01",
+            host,
             no_reply=f"The receiver didn't open {service}. It may not offer {service}, "
-                     "or it isn't signed in: check in the Onkyo Controller app.")
+            "or it isn't signed in: check in the Onkyo Controller app.",
+        )
     except ToolError:
         # Maybe it opened a popup instead ("NLT1B31...TIDAL Login")
         shown = await call_receiver("NLTQSTN", "NLT", host)
@@ -811,25 +885,31 @@ async def open_menu(service: NetService, host: str, folder: list[str]) -> tuple[
         # the longer timeout.
         layer = f"{int(nlt[12:14], 16) + 1:02X}"
         rest = await call_receiver(
-            f"NLSI{position:05d}", f"NLT{code}", host, timeout=3 * TIMEOUT,
-            until=lambda value: value[10:12] == layer,  # value: after "NLT" + code
-            no_reply=f"The receiver didn't open the folder {title!r}.")
+            f"NLSI{position:05d}",
+            f"NLT{code}",
+            host,
+            timeout=3 * TIMEOUT,
+            until=lambda value, layer=layer: value[10:12] == layer,  # value: after "NLT" + code
+            no_reply=f"The receiver didn't open the folder {title!r}.",
+        )
         nlt = code + rest
         items = await read_list(host, nlt)
     return nlt, items
 
 
-FolderPath = Annotated[list[str], Field(
-    description="Folders to open from the service's top menu, in order, e.g. "
-                "[\"My Presets\"] or [\"MiniDLNA Server\", \"Music\", \"Album\", \"21\"]. "
-                "A distinctive part of each name is enough. Empty for the top menu."
-)]
+FolderPath = Annotated[
+    tuple[str, ...],
+    Field(
+        description="Folders to open from the service's top menu, in order, e.g. "
+        '["My Presets"] or ["MiniDLNA Server", "Music", "Album", "21"]. '
+        "A distinctive part of each name is enough. Empty for the top menu."
+    ),
+]
 LIST_LIMIT = 300  # names per kind; a music server's Album folder can hold thousands
 
 
 @mcp.tool(title="List stations", annotations=SETTER)
-async def list_stations(service: NetService = "pandora", folder: FolderPath = [],
-                        receiver: Receiver = None) -> dict:
+async def list_stations(service: NetService = "pandora", folder: FolderPath = (), receiver: Receiver = None) -> dict:
     """Browse a network service: list what can be played (stations, tracks)
     and the folders at one level of its menu. Starts at the top (for Pandora:
     your stations); to look inside a folder, call again with its name added to
@@ -843,20 +923,27 @@ async def list_stations(service: NetService = "pandora", folder: FolderPath = []
     # message ("No Favorites available") or an account item ("Sign Out")
     playable = list(dict.fromkeys(t for _, kind, t in items if kind in ("M", "0")))
     folders = list(dict.fromkeys(t for _, kind, t in items if kind == "F"))
-    result: dict = {"service": service, "folder": folder,
-                    "playable": playable[:LIST_LIMIT], "folders": folders[:LIST_LIMIT]}
+    result: dict = {
+        "service": service,
+        "folder": folder,
+        "playable": playable[:LIST_LIMIT],
+        "folders": folders[:LIST_LIMIT],
+    }
     if len(playable) > LIST_LIMIT or len(folders) > LIST_LIMIT:
-        result["truncated"] = (f"There are {len(playable)} playable items and "
-                               f"{len(folders)} folders; only the first {LIST_LIMIT} "
-                               "of each are listed. Names further down still work.")
+        result["truncated"] = (
+            f"There are {len(playable)} playable items and "
+            f"{len(folders)} folders; only the first {LIST_LIMIT} "
+            "of each are listed. Names further down still work."
+        )
     if not playable and not folders:
         result["message"] = ", ".join(t for _, _, t in items) or "This menu is empty."
     return result
 
 
 @mcp.tool(title="Play station", annotations=SETTER)
-async def play_station(station: str, service: NetService = "pandora", folder: FolderPath = [],
-                       receiver: Receiver = None) -> str:
+async def play_station(
+    station: str, service: NetService = "pandora", folder: FolderPath = (), receiver: Receiver = None
+) -> str:
     """Start playing a station or track from a network service, by name (e.g.
     "Pearl Jam Radio" on Pandora). Names come from list_stations; a
     distinctive part of a name is enough ("pearl jam"). For items inside
@@ -868,20 +955,29 @@ async def play_station(station: str, service: NetService = "pandora", folder: Fo
     playable = [i for i in items if i[1] in ("M", "0")]  # never "Sign Out" and the like
     if not playable:
         folders = [t for _, kind, t in items if kind == "F"]
-        hint = (f" It has folders: {', '.join(folders[:30])}; add one to `folder` "
-                "to look inside." if folders else "")
+        hint = f" It has folders: {', '.join(folders[:30])}; add one to `folder` to look inside." if folders else ""
         raise ToolError(f"Nothing here can be played.{hint}")
     position, _, title = pick(station, playable, "station")
     # Confirmed when the player reports "playing" (NST "P..."), after ~3s
-    await call_receiver(f"NLSI{position:05d}", "NSTP", host, timeout=3 * TIMEOUT,
-                        no_reply=f"{title} was selected but didn't start playing.")
+    await call_receiver(
+        f"NLSI{position:05d}",
+        "NSTP",
+        host,
+        timeout=3 * TIMEOUT,
+        no_reply=f"{title} was selected but didn't start playing.",
+    )
     return f"Playing {title} on {service}"
 
 
 PlaybackAction = Literal["play", "pause", "stop", "next", "previous"]
 # The NTC command for each action, and the NST play state that confirms it
-PLAYBACK_CODES = {"play": ("PLAY", "P"), "pause": ("PAUSE", "p"), "stop": ("STOP", "S"),
-                  "next": ("TRUP", None), "previous": ("TRDN", None)}
+PLAYBACK_CODES = {
+    "play": ("PLAY", "P"),
+    "pause": ("PAUSE", "p"),
+    "stop": ("STOP", "S"),
+    "next": ("TRUP", None),
+    "previous": ("TRDN", None),
+}
 
 
 @mcp.tool(title="Control playback", annotations=PLAYBACK)
@@ -893,9 +989,12 @@ async def control_playback(action: PlaybackAction, receiver: Receiver = None) ->
     host = await resolve_host(receiver)
     code, state = PLAYBACK_CODES[action]
     if state:
-        await call_receiver(f"NTC{code}", f"NST{state}", host,
-                            no_reply=f"The player didn't {action}. Is something "
-                                     "selected? Start a station with play_station.")
+        await call_receiver(
+            f"NTC{code}",
+            f"NST{state}",
+            host,
+            no_reply=f"The player didn't {action}. Is something selected? Start a station with play_station.",
+        )
         return {"play": "Playing", "pause": "Paused", "stop": "Stopped"}[action]
     # A skip has no state to wait for: watch for the title to change
     before = await call_receiver("NTIQSTN", "NTI", host)
@@ -905,8 +1004,10 @@ async def control_playback(action: PlaybackAction, receiver: Receiver = None) ->
         title = await call_receiver("NTIQSTN", "NTI", host)
         if title != before:
             return f"Now playing {title.strip()}"
-    raise ToolError(f"The track didn't change. The service may not allow that "
-                    f"right now (Pandora limits skips per hour and can't go back).")
+    raise ToolError(
+        "The track didn't change. The service may not allow that "
+        "right now (Pandora limits skips per hour and can't go back)."
+    )
 
 
 def main(argv: list[str] | None = None) -> None:

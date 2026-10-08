@@ -1,12 +1,23 @@
 """Pure functions: packet framing, volume conversion, input tables. No network."""
+
 import struct
 from typing import get_args
 
 import pytest
 
 from onkyo_mcp import server as onkyo_mcp
-from onkyo_mcp.server import (CODE_MODES, CODE_SOURCES, MODE_CODES, SOURCE_CODES, ListeningMode, Source,
-                       build_packet, decode_datagram, raw_to_volume, volume_to_raw)
+from onkyo_mcp.server import (
+    CODE_MODES,
+    CODE_SOURCES,
+    MODE_CODES,
+    SOURCE_CODES,
+    ListeningMode,
+    Source,
+    build_packet,
+    decode_datagram,
+    raw_to_volume,
+    volume_to_raw,
+)
 
 
 def test_build_packet_layout():
@@ -69,7 +80,7 @@ def test_listening_mode_codes_are_unique():
 
 
 def test_decode_datagram_utf8():
-    data = "!1NTIDéjà Vu\x1a\r\n".encode("utf-8")
+    data = "!1NTIDéjà Vu\x1a\r\n".encode()
     pkt = b"ISCP" + struct.pack(">IIB3x", 16, len(data), 1) + data
     assert decode_datagram(pkt) == "NTIDéjà Vu"
 
@@ -77,11 +88,30 @@ def test_decode_datagram_utf8():
 def test_empty_settings_use_defaults():
     # WSL passes variables listed in WSLENV but unset on Windows as "", which
     # must mean "use the default", not crash at import (float("")).
-    import os, subprocess, sys
-    env = {**os.environ, **{name: "" for name in (
-        "ONKYO_HOST", "ONKYO_PORT", "ONKYO_MAX_VOLUME", "ONKYO_VOLUME_STEPS",
-        "ONKYO_TIMEOUT", "ONKYO_DEBUG", "ONKYO_DISCOVERY_ADDR")}}
-    out = subprocess.run([sys.executable, "-c",
-                          "import onkyo_mcp.server as o; print(repr(o.HOST), o.PORT, o.MAX_VOLUME, o.TIMEOUT)"],
-                         env=env, capture_output=True, text=True, check=True)
+    import os
+    import subprocess
+    import sys
+
+    env = {
+        **os.environ,
+        **{
+            name: ""
+            for name in (
+                "ONKYO_HOST",
+                "ONKYO_PORT",
+                "ONKYO_MAX_VOLUME",
+                "ONKYO_VOLUME_STEPS",
+                "ONKYO_TIMEOUT",
+                "ONKYO_DEBUG",
+                "ONKYO_DISCOVERY_ADDR",
+            )
+        },
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", "import onkyo_mcp.server as o; print(repr(o.HOST), o.PORT, o.MAX_VOLUME, o.TIMEOUT)"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     assert out.stdout.split() == ["''", "60128", "75.0", "5.0"]  # no host: use discovery

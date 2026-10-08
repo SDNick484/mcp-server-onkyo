@@ -1,11 +1,12 @@
 """eISCP transport against fake_receiver.py. No MCP here."""
+
 import asyncio
 
 import pytest
 
-from onkyo_mcp.sim import fake_receiver
 from onkyo_mcp import server as onkyo_mcp
 from onkyo_mcp.server import discover, send
+from onkyo_mcp.sim import fake_receiver
 
 pytestmark = pytest.mark.anyio
 
@@ -42,19 +43,22 @@ async def test_unknown_command_returns_na(receiver):
 
 async def test_discover_parses_ecn_reply(receiver):
     found = await discover(timeout=0.5)
-    assert found == [{"host": "127.0.0.1", "model": "TX-NR7100", "port": 60128,
-                      "region": "DX", "mac": "00:09:B0:12:34:56"}]
+    assert found == [
+        {"host": "127.0.0.1", "model": "TX-NR7100", "port": 60128, "region": "DX", "mac": "00:09:B0:12:34:56"}
+    ]
 
 
 @pytest.fixture
 async def booting_receiver(monkeypatch):
     """Answers like a TX-NR7100 just after power-on: a status push with the same
     prefix ("AMT00") arrives before the real reply ("AMT01")."""
+
     async def handle(reader, writer):
         await reader.read(100)
         writer.write(fake_receiver.packet("AMT00") + fake_receiver.packet("AMT01"))
         await writer.drain()
         writer.close()
+
     server = await asyncio.start_server(handle, "127.0.0.1", 0)
     monkeypatch.setattr(onkyo_mcp, "PORT", server.sockets[0].getsockname()[1])
     async with server:

@@ -7,8 +7,9 @@ Simulated Onkyo receiver for developing without hardware.
 It speaks enough eISCP to exercise the server: it remembers PWR/MVL/AMT/SLI/LMD
 state for the main zone and ZPW/ZVL/ZMT/SLZ for zone 2 (it has no zone 3, like
 a TX-NR6050) and a network player (NST/NTI/NAT/NAL/NTM/NLT/NDN, NSV to pick
-Pandora or Amazon Music, NLA/NLSI for Pandora's station list, NTC playback), answers QSTN queries, and sends an unsolicited status message before
-every reply, the way real receivers do, so the server's filtering gets tested.
+Pandora or Amazon Music, NLA/NLSI for Pandora's station list, NTC playback),
+answers QSTN queries, and sends an unsolicited status message before every
+reply, the way real receivers do, so the server's filtering gets tested.
 A zone in standby answers queries but ignores every other command for that
 zone except power, with no reply at all, like a real TX-NR7100.
 
@@ -22,20 +23,35 @@ import sys
 
 # Main zone on; MVL 0x50 = 80 raw -> displays 40.0 on a 0.5-step model.
 # Zone 2 in standby, its input following the main zone (SLZ 80).
-DEFAULT_STATE = {"PWR": "01", "MVL": "50", "AMT": "00", "SLI": "10", "LMD": "00",
-                 "ZPW": "00", "ZVL": "50", "ZMT": "00", "SLZ": "80",
-                 # Network player, showing its top menu ("NET"), nothing playing
-                 "NLT": "F3000000000E0000FFFF00NET", "NMS": "xxxxxxxF3", "NST": "Sxx1", "NTI": "", "NAT": "",
-                 "NAL": "", "NTM": "--:--:--/--:--:--", "NDN": "",
-                 "menu_path": (),  # folders opened (positions), not an eISCP code
-                 # Its self-description (trimmed): a TX-NR6050, Zone 2 but no Zone 3
-                 "NRI": '<?xml version="1.0" encoding="utf-8"?><response status="ok"><device id="TX-NR6050">'
-                        '<model>TX-NR6050</model><zonelist count="4">'
-                        '<zone id="1" value="1" name="Main" volmax="100"/>'
-                        '<zone id="2" value="1" name="Zone2" volmax="100"/>'
-                        '<zone id="3" value="0" name="Zone3" volmax="0"/>'
-                        '<zone id="4" value="0" name="Zone4" volmax="0"/>'
-                        '</zonelist></device></response>'}
+DEFAULT_STATE = {
+    "PWR": "01",
+    "MVL": "50",
+    "AMT": "00",
+    "SLI": "10",
+    "LMD": "00",
+    "ZPW": "00",
+    "ZVL": "50",
+    "ZMT": "00",
+    "SLZ": "80",
+    # Network player, showing its top menu ("NET"), nothing playing
+    "NLT": "F3000000000E0000FFFF00NET",
+    "NMS": "xxxxxxxF3",
+    "NST": "Sxx1",
+    "NTI": "",
+    "NAT": "",
+    "NAL": "",
+    "NTM": "--:--:--/--:--:--",
+    "NDN": "",
+    "menu_path": (),  # folders opened (positions), not an eISCP code
+    # Its self-description (trimmed): a TX-NR6050, Zone 2 but no Zone 3
+    "NRI": '<?xml version="1.0" encoding="utf-8"?><response status="ok"><device id="TX-NR6050">'
+    '<model>TX-NR6050</model><zonelist count="4">'
+    '<zone id="1" value="1" name="Main" volmax="100"/>'
+    '<zone id="2" value="1" name="Zone2" volmax="100"/>'
+    '<zone id="3" value="0" name="Zone3" volmax="0"/>'
+    '<zone id="4" value="0" name="Zone4" volmax="0"/>'
+    "</zonelist></device></response>",
+}
 # Services NSV can switch to (the rest get no reply, like a service the
 # receiver doesn't offer), and the menu title each one shows
 NET_SERVICES = {"04": "Pandora", "1C": "Amazon Music", "0E": "TuneIn Radio", "00": "Music Server"}
@@ -43,15 +59,26 @@ NET_SERVICES = {"04": "Pandora", "1C": "Amazon Music", "0E": "TuneIn Radio", "00
 SIGNED_OUT = {"1B": "TIDAL Login"}
 # Pandora's top menu, as (icontype, title): M = music, the rest must never be
 # played. "Pearl Jam Radio" appears twice, as it does on a real account.
-STATIONS = [("G", "Create new station"), ("M", "Shuffle"), ("M", "Pearl Jam Radio"),
-            ("M", "Beyoncé Radio"), ("M", "Pearl Jam Radio"), ("-", "Sign Out")]
+STATIONS = [
+    ("G", "Create new station"),
+    ("M", "Shuffle"),
+    ("M", "Pearl Jam Radio"),
+    ("M", "Beyoncé Radio"),
+    ("M", "Pearl Jam Radio"),
+    ("-", "Sign Out"),
+]
 # Other services' top menus. TuneIn's are folders (F), each with its own
 # items: (icontype, title, contents) for a folder
-MENUS = {"04": STATIONS, "1C": [],
-         # More albums than one NLA page (100) holds, to exercise paging
-         "00": [("F", "Album", [("F", f"Album {n}", [("M", f"Track {n}")]) for n in range(1, 251)])],
-         "0E": [("F", "My Presets", [("M", "KQED Public Radio"), ("M", "KCSM Jazz")]),
-                ("F", "Local Radio", [("-", "No stations available")])]}
+MENUS = {
+    "04": STATIONS,
+    "1C": [],
+    # More albums than one NLA page (100) holds, to exercise paging
+    "00": [("F", "Album", [("F", f"Album {n}", [("M", f"Track {n}")]) for n in range(1, 251)])],
+    "0E": [
+        ("F", "My Presets", [("M", "KQED Public Radio"), ("M", "KCSM Jazz")]),
+        ("F", "Local Radio", [("-", "No stations available")]),
+    ],
+}
 
 
 def current_menu(state: dict) -> list:
@@ -61,11 +88,12 @@ def current_menu(state: dict) -> list:
     for position in state["menu_path"]:
         items = items[position - 1][2]
     return items
+
+
 TRACKS = ["Black", "Interstate Love Song", "Garden"]  # what "next" steps through
 selected: list[int] = []  # NLSI positions received, for tests to check
 # Which power command each setting belongs to
-ZONE_POWER = {"MVL": "PWR", "AMT": "PWR", "SLI": "PWR", "LMD": "PWR",
-              "ZVL": "ZPW", "ZMT": "ZPW", "SLZ": "ZPW"}
+ZONE_POWER = {"MVL": "PWR", "AMT": "PWR", "SLI": "PWR", "LMD": "PWR", "ZVL": "ZPW", "ZMT": "ZPW", "SLZ": "ZPW"}
 state = dict(DEFAULT_STATE)
 
 
@@ -76,12 +104,11 @@ def reset_state() -> None:
 
 
 def packet(msg: str) -> bytes:
-    data = f"!1{msg}\x1a\r\n".encode("utf-8")
+    data = f"!1{msg}\x1a\r\n".encode()
     return b"ISCP" + struct.pack(">IIB3x", 16, len(data), 1) + data
 
 
-async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                 state: dict = state) -> None:
+async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, state: dict = state) -> None:
     try:
         while True:
             header = await reader.readexactly(16)
@@ -108,12 +135,15 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                 # "L" + sequence (4) + layer (2) + first item (4 hex, from 0) + count (4 hex).
                 # The station playing now is marked icontype "0", not "M".
                 start, count = int(param[7:11], 16), int(param[11:15], 16)
-                page = current_menu(state)[start:start + count]
-                items = "".join(f'<item icontype="{"0" if i in selected[-1:] else t}" '
-                                f'title="{title}" selectable="1" />'
-                                for i, (t, title, *_) in enumerate(page, start=start + 1))
-                xml = (f'<?xml version="1.0" encoding="utf-8"?><response status="ok">'
-                       f'<items offset="0" totalitems="{items.count("<item")}" >{items}</items></response>')
+                page = current_menu(state)[start : start + count]
+                items = "".join(
+                    f'<item icontype="{"0" if i in selected[-1:] else t}" title="{title}" selectable="1" />'
+                    for i, (t, title, *_) in enumerate(page, start=start + 1)
+                )
+                xml = (
+                    f'<?xml version="1.0" encoding="utf-8"?><response status="ok">'
+                    f'<items offset="0" totalitems="{items.count("<item")}" >{items}</items></response>'
+                )
                 writer.write(packet(f"NLAX{param[1:5]}S000{xml}"))
             elif code == "NLS" and param.startswith("I"):
                 position = int(param[1:])
@@ -182,9 +212,7 @@ async def start(host: str = "127.0.0.1", port: int = 60128, state: dict = state)
     several independent receivers. Returns (tcp_server, udp_transport, port)."""
     server = await asyncio.start_server(lambda r, w: handle(r, w, state), host, port)
     port = server.sockets[0].getsockname()[1]
-    udp, _ = await asyncio.get_running_loop().create_datagram_endpoint(
-        Discovery, local_addr=(host, port)
-    )
+    udp, _ = await asyncio.get_running_loop().create_datagram_endpoint(Discovery, local_addr=(host, port))
     return server, udp, port
 
 

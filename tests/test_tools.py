@@ -3,14 +3,15 @@
 This tests the contract the model actually sees: tools/list schemas, argument
 validation, and tool results, not just the Python functions underneath.
 """
+
 import json
 import logging
 
 import pytest
 from mcp import Client
 
-from onkyo_mcp.sim import fake_receiver
 from onkyo_mcp import server as onkyo_mcp
+from onkyo_mcp.sim import fake_receiver
 
 pytestmark = pytest.mark.anyio
 
@@ -27,10 +28,20 @@ def text(result) -> str:
 
 async def test_tools_list(client):
     tools = {t.name: t for t in (await client.list_tools()).tools}
-    assert set(tools) == {"discover_receivers", "get_status", "set_power",
-                          "set_volume", "set_mute", "set_input", "set_listening_mode",
-                          "select_net_service", "get_now_playing",
-                          "list_stations", "play_station", "control_playback"}
+    assert set(tools) == {
+        "discover_receivers",
+        "get_status",
+        "set_power",
+        "set_volume",
+        "set_mute",
+        "set_input",
+        "set_listening_mode",
+        "select_net_service",
+        "get_now_playing",
+        "list_stations",
+        "play_station",
+        "control_playback",
+    }
     # Literal["bd-dvd", ...] becomes a JSON Schema enum the model must pick from
     source = tools["set_input"].input_schema["properties"]["source"]
     assert set(source["enum"]) == set(onkyo_mcp.SOURCE_CODES)
@@ -54,11 +65,17 @@ async def test_tool_annotations(client):
 
 async def test_get_status(client):
     result = await client.call_tool("get_status", {})
-    assert json.loads(text(result)) == {"receiver": "127.0.0.1", "zone": "main", "power": "on",
-                                        "volume": 40.0, "muted": False,
-                                        "input": "bd-dvd", "listening_mode": "stereo",
-                                        # the fake has Zone 2 (in standby), no Zone 3
-                                        "other_zones": {"zone2": "standby"}}
+    assert json.loads(text(result)) == {
+        "receiver": "127.0.0.1",
+        "zone": "main",
+        "power": "on",
+        "volume": 40.0,
+        "muted": False,
+        "input": "bd-dvd",
+        "listening_mode": "stereo",
+        # the fake has Zone 2 (in standby), no Zone 3
+        "other_zones": {"zone2": "standby"},
+    }
 
 
 @pytest.fixture
@@ -91,15 +108,17 @@ async def test_get_status_picks_receiver(client, second_receiver):
     assert (default["receiver"], default["power"], default["input"]) == ("127.0.0.1", "on", "bd-dvd")
 
 
-@pytest.mark.parametrize("tool, args, code, value", [
-    ("set_power", {"on": False}, "PWR", "00"),  # second receiver starts on
-    ("set_volume", {"level": 20}, "MVL", "28"),
-    ("set_mute", {"muted": True}, "AMT", "01"),
-    ("set_input", {"source": "tv"}, "SLI", "12"),
-    ("set_listening_mode", {"mode": "direct"}, "LMD", "01"),
-])
-async def test_set_tools_change_only_chosen_receiver(client, receiver, second_receiver,
-                                                     tool, args, code, value):
+@pytest.mark.parametrize(
+    "tool, args, code, value",
+    [
+        ("set_power", {"on": False}, "PWR", "00"),  # second receiver starts on
+        ("set_volume", {"level": 20}, "MVL", "28"),
+        ("set_mute", {"muted": True}, "AMT", "01"),
+        ("set_input", {"source": "tv"}, "SLI", "12"),
+        ("set_listening_mode", {"mode": "direct"}, "LMD", "01"),
+    ],
+)
+async def test_set_tools_change_only_chosen_receiver(client, receiver, second_receiver, tool, args, code, value):
     default_before = receiver[code]
     result = await client.call_tool(tool, {**args, "receiver": "::1"})
     assert not result.is_error
@@ -203,8 +222,9 @@ async def test_setter_in_standby_says_so(client, receiver):
     receiver["PWR"] = "00"
     result = await client.call_tool("set_volume", {"level": 20})
     assert result.is_error
-    assert text(result) == ("Error executing tool set_volume: The receiver at 127.0.0.1 "
-                            "is in standby. Turn it on with set_power first.")
+    assert text(result) == (
+        "Error executing tool set_volume: The receiver at 127.0.0.1 is in standby. Turn it on with set_power first."
+    )
     assert receiver["MVL"] == "50"  # unchanged
 
 
@@ -232,16 +252,22 @@ async def test_zone_arguments_in_schema(client):
 
 async def test_zone2_status(client, receiver):
     result = await client.call_tool("get_status", {"zone": "zone2"})
-    assert json.loads(text(result)) == {"receiver": "127.0.0.1", "zone": "zone2", "power": "standby",
-                                        "volume": 40.0, "muted": False, "input": "same-as-main"}
+    assert json.loads(text(result)) == {
+        "receiver": "127.0.0.1",
+        "zone": "zone2",
+        "power": "standby",
+        "volume": 40.0,
+        "muted": False,
+        "input": "same-as-main",
+    }
 
 
 async def test_zone2_on_net_at_capped_volume(client, receiver):
     # The request that started this: "turn on Zone 2 with network audio"
     assert text(await client.call_tool("set_power", {"on": True, "zone": "zone2"})).startswith(
-        "Zone 2: Power is now on.")
-    assert text(await client.call_tool("set_input", {"source": "net", "zone": "zone2"})) == \
-        "Zone 2: Input is now net"
+        "Zone 2: Power is now on."
+    )
+    assert text(await client.call_tool("set_input", {"source": "net", "zone": "zone2"})) == "Zone 2: Input is now net"
     result = await client.call_tool("set_volume", {"level": 90, "zone": "zone2"})
     assert text(result) == "Zone 2: Volume is now 75.0 (requested 90.0, capped at 75.0)"
     assert text(await client.call_tool("set_mute", {"muted": True, "zone": "zone2"})) == "Zone 2: Muted"
@@ -253,8 +279,9 @@ async def test_zone2_on_net_at_capped_volume(client, receiver):
 async def test_zone2_in_standby_says_so(client, receiver):
     result = await client.call_tool("set_input", {"source": "net", "zone": "zone2"})
     assert result.is_error
-    assert ("Zone 2 of the receiver at 127.0.0.1 is in standby. "
-            "Turn it on with set_power with zone='zone2' first.") in text(result)
+    assert (
+        "Zone 2 of the receiver at 127.0.0.1 is in standby. Turn it on with set_power with zone='zone2' first."
+    ) in text(result)
     assert receiver["SLZ"] == "80"  # unchanged
 
 
@@ -287,7 +314,6 @@ async def test_same_as_main_only_for_other_zones(client, receiver):
     assert receiver["SLI"] == "10"  # never sent
 
 
-
 async def test_select_net_service(client, receiver):
     result = await client.call_tool("select_net_service", {"service": "pandora"})
     assert text(result) == "Network service is now Pandora"
@@ -309,9 +335,17 @@ async def test_net_service_names_match_code_table(client):
 
 async def test_now_playing_idle(client, receiver):
     result = json.loads(text(await client.call_tool("get_now_playing", {})))
-    assert result == {"receiver": "127.0.0.1", "service": None, "station": None, "menu": "NET",
-                      "state": "stopped",
-                      "title": None, "artist": None, "album": None, "position": None}
+    assert result == {
+        "receiver": "127.0.0.1",
+        "service": None,
+        "station": None,
+        "menu": "NET",
+        "state": "stopped",
+        "title": None,
+        "artist": None,
+        "album": None,
+        "position": None,
+    }
 
 
 async def test_now_playing_service_survives_menu_browsing(client, receiver):
@@ -324,21 +358,26 @@ async def test_now_playing_service_survives_menu_browsing(client, receiver):
 
 
 async def test_now_playing_track_with_accents(client, receiver):
-    receiver.update(NST="Pxx1", NTI="Déjà Vu", NAT="Beyoncé", NAL="B'Day",
-                    NTM="00:01:02/00:04:00")
+    receiver.update(NST="Pxx1", NTI="Déjà Vu", NAT="Beyoncé", NAL="B'Day", NTM="00:01:02/00:04:00")
     await client.call_tool("select_net_service", {"service": "pandora"})
     result = json.loads(text(await client.call_tool("get_now_playing", {})))
-    assert result == {"receiver": "127.0.0.1", "service": "pandora", "station": None,
-                      "menu": "Pandora", "state": "playing",
-                      "title": "Déjà Vu", "artist": "Beyoncé", "album": "B'Day",
-                      "position": "00:01:02/00:04:00"}
+    assert result == {
+        "receiver": "127.0.0.1",
+        "service": "pandora",
+        "station": None,
+        "menu": "Pandora",
+        "state": "playing",
+        "title": "Déjà Vu",
+        "artist": "Beyoncé",
+        "album": "B'Day",
+        "position": "00:01:02/00:04:00",
+    }
 
 
 async def test_mute_rejected_is_not_reported_as_unmuted(client, receiver):
     del receiver["AMT"]  # the fake answers N/A, as a TX-NR7100 zone 3 in standby did
     result = await client.call_tool("set_mute", {"muted": True})
     assert "rejected" in text(result)
-
 
 
 async def test_list_stations_only_music(client, receiver):
@@ -375,8 +414,7 @@ async def test_control_playback(client, receiver):
     assert text(await client.call_tool("control_playback", {"action": "pause"})) == "Paused"
     assert receiver["NST"].startswith("p")
     assert text(await client.call_tool("control_playback", {"action": "play"})) == "Playing"
-    assert text(await client.call_tool("control_playback", {"action": "next"})) == \
-        "Now playing Interstate Love Song"
+    assert text(await client.call_tool("control_playback", {"action": "next"})) == "Now playing Interstate Love Song"
 
 
 async def test_previous_refused_says_so(client, receiver):
@@ -395,15 +433,12 @@ async def test_playback_annotations(client):
     assert tools["control_playback"].annotations.idempotent_hint is False  # "next" twice != once
 
 
-
 async def test_playing_station_still_listed_and_playable(client, receiver):
     # The receiver marks the playing station icontype "0" instead of "M"
     await client.call_tool("play_station", {"station": "Beyoncé Radio"})
     result = await client.call_tool("list_stations", {})
     assert json.loads(text(result))["playable"] == ["Shuffle", "Pearl Jam Radio", "Beyoncé Radio"]
-    assert text(await client.call_tool("play_station", {"station": "beyoncé"})) == \
-        "Playing Beyoncé Radio on pandora"
-
+    assert text(await client.call_tool("play_station", {"station": "beyoncé"})) == "Playing Beyoncé Radio on pandora"
 
 
 async def test_no_host_uses_the_one_discovered_receiver(client, receiver, monkeypatch):
@@ -423,14 +458,13 @@ async def test_no_host_and_nothing_discovered_says_so(client, receiver, monkeypa
 
 async def test_no_host_and_several_receivers_asks_which(client, receiver, monkeypatch):
     async def two_receivers(timeout=3.0):
-        return [{"host": "192.168.1.147", "model": "TX-NR6050"},
-                {"host": "192.168.1.245", "model": "TX-NR7100"}]
+        return [{"host": "192.168.1.147", "model": "TX-NR6050"}, {"host": "192.168.1.245", "model": "TX-NR7100"}]
+
     monkeypatch.setattr(onkyo_mcp, "HOST", "")
     monkeypatch.setattr(onkyo_mcp, "discover", two_receivers)
     result = await client.call_tool("get_status", {})
     assert result.is_error
     assert "TX-NR6050 at 192.168.1.147, TX-NR7100 at 192.168.1.245" in text(result)
-
 
 
 async def test_signed_out_service_says_so(client, receiver):
@@ -444,14 +478,12 @@ async def test_signed_out_service_says_so(client, receiver):
 async def test_browse_folders(client, receiver):
     top = json.loads(text(await client.call_tool("list_stations", {"service": "tunein"})))
     assert (top["playable"], top["folders"]) == ([], ["My Presets", "Local Radio"])
-    presets = json.loads(text(await client.call_tool("list_stations", {"service": "tunein",
-                                                        "folder": ["presets"]})))
+    presets = json.loads(text(await client.call_tool("list_stations", {"service": "tunein", "folder": ["presets"]})))
     assert presets["playable"] == ["KQED Public Radio", "KCSM Jazz"]
 
 
 async def test_play_from_folder(client, receiver):
-    result = await client.call_tool("play_station", {"station": "jazz", "service": "tunein",
-                                                     "folder": ["My Presets"]})
+    result = await client.call_tool("play_station", {"station": "jazz", "service": "tunein", "folder": ["My Presets"]})
     assert text(result) == "Playing KCSM Jazz on tunein"
     assert fake_receiver.selected == [2]  # position inside the folder
 
@@ -473,12 +505,11 @@ async def test_empty_folder_passes_on_receiver_message(client, receiver):
     assert json.loads(text(result))["message"] == "No stations available"
 
 
-
 async def test_long_lists_are_read_in_pages(client, receiver):
     # 250 albums: three NLA pages (100 + 100 + 50), positions counted across pages
-    albums = json.loads(text(await client.call_tool("list_stations", {
-        "service": "music-server", "folder": ["Album"]})))
+    albums = json.loads(text(await client.call_tool("list_stations", {"service": "music-server", "folder": ["Album"]})))
     assert len(albums["folders"]) == 250 and albums["folders"][-1] == "Album 250"
-    result = await client.call_tool("play_station", {
-        "station": "Track 237", "service": "music-server", "folder": ["Album", "Album 237"]})
+    result = await client.call_tool(
+        "play_station", {"station": "Track 237", "service": "music-server", "folder": ["Album", "Album 237"]}
+    )
     assert text(result) == "Playing Track 237 on music-server"

@@ -1,7 +1,7 @@
 import pytest
 
-from onkyo_mcp.sim import fake_receiver
 from onkyo_mcp import server as onkyo_mcp
+from onkyo_mcp.sim import fake_receiver
 
 
 # Async tests use anyio's pytest plugin (marked with pytest.mark.anyio). Unlike
