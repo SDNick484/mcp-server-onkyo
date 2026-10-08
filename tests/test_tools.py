@@ -305,7 +305,7 @@ async def test_missing_zone_says_so(client, receiver):
     # The fake describes itself (NRIQSTN) as a TX-NR6050, which has no zone 3
     result = await client.call_tool("get_status", {"zone": "zone3"})
     assert result.is_error
-    assert "The TX-NR6050 at 127.0.0.1 has no Zone 3." in text(result)
+    assert "The receiver at 127.0.0.1, a TX-NR6050, has no Zone 3." in text(result)
 
 
 async def test_missing_zone_without_self_description(client, receiver):
@@ -320,7 +320,7 @@ async def test_fixed_volume_zone_says_so(client, receiver):
     receiver["NRI"] = receiver["NRI"].replace('name="Zone2" volmax="100"', 'name="Zone2" volmax="0"')
     result = await client.call_tool("set_volume", {"level": 20, "zone": "zone2"})
     assert result.is_error
-    assert "Zone 2 of the TX-NR6050 at 127.0.0.1 has no volume control" in text(result)
+    assert "Zone 2 of the receiver at 127.0.0.1 has no volume control" in text(result)
     assert receiver["ZVL"] == "50"  # never sent
 
 

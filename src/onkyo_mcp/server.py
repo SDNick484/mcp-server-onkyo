@@ -547,13 +547,13 @@ async def check_zone(c: Call, zone: Zone, volume: bool = False) -> None:
     info = layout.zones.get(zone) if layout else None
     if layout is None or info is None:
         return
-    label = ZONE_LABELS[zone]
+    # Named the way the user knows it ("Theater (10.0.0.2)"), with the model
+    # as the reason a zone is missing
     if not info.present:
-        raise ReceiverError(f"The {layout.model} at {c.host} has no {label}.")
+        raise ReceiverError(f"{c.who()}, a {layout.model}, has no {ZONE_LABELS[zone]}.")
     if volume and not info.volume:
         raise ReceiverError(
-            f"{label} of the {layout.model} at {c.host} has no volume control "
-            "(fixed-level output, or its outputs are used for other speakers)."
+            f"{c.who(zone)} has no volume control (fixed-level output, or its outputs are used for other speakers)."
         )
 
 
