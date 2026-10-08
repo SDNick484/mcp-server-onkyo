@@ -6,18 +6,9 @@ from typing import get_args
 import pytest
 
 from onkyo_mcp import server as onkyo_mcp
-from onkyo_mcp.server import (
-    CODE_MODES,
-    CODE_SOURCES,
-    MODE_CODES,
-    SOURCE_CODES,
-    ListeningMode,
-    Source,
-    build_packet,
-    decode_datagram,
-    raw_to_volume,
-    volume_to_raw,
-)
+from onkyo_mcp.codes import CODE_MODES, CODE_SOURCES, MODE_CODES, SOURCE_CODES, ListeningMode, Source
+from onkyo_mcp.eiscp import build_packet, decode_datagram
+from onkyo_mcp.server import raw_to_volume, volume_to_raw
 
 
 def test_build_packet_layout():
@@ -115,3 +106,42 @@ def test_empty_settings_use_defaults():
         check=True,
     )
     assert out.stdout.split() == ["''", "60128", "75.0", "5.0"]  # no host: use discovery
+
+
+def test_parse_ecn_tolerates_missing_and_bad_fields():
+    from onkyo_mcp.eiscp import Found, parse_ecn
+
+    assert parse_ecn("ECNTX-NR6050/60128/DX/0009B0F76CFD", "10.0.0.2") == Found(
+        "10.0.0.2", "TX-NR6050", 60128, "DX", "00:09:B0:F7:6C:FD"
+    )
+    # A truncated reply still parses, with the default port
+    assert parse_ecn("ECNTX-NR6050", "10.0.0.2") == Found("10.0.0.2", "TX-NR6050", 60128, "", "")
+    assert parse_ecn("ECNTX-NR6050/notaport/DX/", "10.0.0.2").port == 60128
+    assert parse_ecn("NLSU0-x", "10.0.0.2") is None  # not a discovery reply
+
+
+async def _stream(data: bytes):
+    import asyncio
+
+    reader = asyncio.StreamReader()
+    reader.feed_data(data)
+    reader.feed_eof()
+    return reader
+
+
+@pytest.mark.anyio
+async def test_read_packet_rejects_implausible_header():
+    # A garbled stream must fail fast, not wait for (or allocate) 4 GB of "data"
+    from onkyo_mcp.eiscp import read_packet
+
+    bad = b"ISCP" + struct.pack(">IIB3x", 16, 0xFFFFFFFF, 1)
+    with pytest.raises(ValueError, match="Implausible"):
+        await read_packet(await _stream(bad))
+
+
+@pytest.mark.anyio
+async def test_read_packet_rejects_bad_magic():
+    from onkyo_mcp.eiscp import read_packet
+
+    with pytest.raises(ValueError, match="Bad magic"):
+        await read_packet(await _stream(b"XSCP" + struct.pack(">IIB3x", 16, 2, 1) + b"!1"))

@@ -201,7 +201,7 @@ async def test_set_listening_mode_invalid_name(client, receiver):
 async def test_debug_logs_mcp_and_eiscp_traffic(client, receiver, caplog):
     caplog.set_level(logging.DEBUG, logger="onkyo_mcp")
     await client.call_tool("set_mute", {"muted": True})
-    lines = [r.getMessage() for r in caplog.records if r.name == "onkyo_mcp"]
+    lines = [r.getMessage() for r in caplog.records if r.name.startswith("onkyo_mcp")]
     # In order: the request in, the packets out and back, the result out
     assert any(m.startswith("MCP <- [") and "tools/call" in m and '"muted": true' in m for m in lines)
     assert "eISCP -> 127.0.0.1 AMT01" in lines
@@ -213,7 +213,7 @@ async def test_debug_logs_mcp_and_eiscp_traffic(client, receiver, caplog):
 async def test_no_traffic_logged_by_default(client, receiver, caplog):
     caplog.set_level(logging.INFO)  # anything below WARNING stays silent unless debugging
     await client.call_tool("set_mute", {"muted": True})
-    assert not [r for r in caplog.records if r.name == "onkyo_mcp"]
+    assert not [r for r in caplog.records if r.name.startswith("onkyo_mcp")]
 
 
 async def test_setter_in_standby_says_so(client, receiver):

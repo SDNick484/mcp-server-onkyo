@@ -22,10 +22,10 @@ Log MCP and eISCP traffic to stderr (either works; also with --discover):
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
-import struct
 from collections.abc import Callable
 from typing import Annotated, Literal
 from xml.etree import ElementTree
@@ -34,6 +34,23 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
+
+from . import eiscp
+from .codes import (
+    CODE_MODES,
+    CODE_NET_SERVICES,
+    CODE_SOURCES,
+    MODE_CODES,
+    NET_SERVICE_CODES,
+    PLAY_STATES,
+    SOURCE_CODES,
+    ZONE_CODES,
+    ZONE_LABELS,
+    ListeningMode,
+    NetService,
+    Source,
+    Zone,
+)
 
 
 def setting(name: str, default: str) -> str:
@@ -85,201 +102,21 @@ def volume_to_raw(volume: float) -> str:
     return f"{round(volume * VOLUME_STEPS):02X}"
 
 
-# Input selector (SLI) codes, named after the TX-NR7100/6050 front-panel labels.
-# The Literal type becomes a JSON Schema "enum", so the model can only pick
-# one of these names. Keep the two in sync.
-Source = Literal[
-    "bd-dvd",
-    "game",
-    "cbl-sat",
-    "strm-box",
-    "pc",
-    "aux",
-    "tv",
-    "phono",
-    "cd",
-    "fm",
-    "am",
-    "net",
-    "bluetooth",
-    "same-as-main",
-]
-SOURCE_CODES: dict[str, str] = {
-    "bd-dvd": "10",
-    "game": "02",
-    "cbl-sat": "01",
-    "strm-box": "11",
-    "pc": "05",
-    "aux": "03",
-    "tv": "12",
-    "phono": "22",
-    "cd": "23",
-    "fm": "24",
-    "am": "25",
-    "net": "2B",
-    "bluetooth": "2E",
-    "same-as-main": "80",  # zones 2/3 only: play whatever the main zone plays
-}
-# Reverse lookup, for turning the receiver's replies back into names
-CODE_SOURCES = {code: name for name, code in SOURCE_CODES.items()}
-
-# Listening mode (LMD) codes. Several codes have older and newer meanings in
-# onkyo-eiscp's table (80 = PLII Movie / Dolby Surround, 82 = Neo:6 Cinema /
-# DTS Neural:X, 03 = Film / Game-RPG); these names are the 2021-model ones.
-ListeningMode = Literal[
-    "stereo",
-    "direct",
-    "pure-audio",
-    "all-ch-stereo",
-    "full-mono",
-    "theater-dimensional",
-    "dolby-surround",
-    "dts-neural-x",
-    "game-rpg",
-    "game-action",
-    "game-rock",
-    "game-sports",
-]
-MODE_CODES: dict[str, str] = {
-    "stereo": "00",
-    "direct": "01",
-    "pure-audio": "11",
-    "all-ch-stereo": "0C",
-    "full-mono": "13",
-    "theater-dimensional": "0D",
-    "dolby-surround": "80",
-    "dts-neural-x": "82",
-    "game-rpg": "03",
-    "game-action": "05",
-    "game-rock": "06",
-    "game-sports": "0E",
-}
-CODE_MODES = {code: name for name, code in MODE_CODES.items()}
-
-# Network services (NSV codes): the services the Onkyo Controller app offers
-# for a TX-NR6050/7100, plus TuneIn and the music server (DLNA), which both
-# receivers list though the app doesn't show them. Codes as the receivers
-# list them in their own description (NRIQSTN, <netservicelist>);
-# onkyo-eiscp's tables have TIDAL as 19, AirPlay as 18 and no Amazon Music.
-# All verified on a TX-NR6050. Most must be signed in on the receiver first.
-NetService = Literal["pandora", "spotify", "deezer", "tidal", "amazon-music", "airplay", "tunein", "music-server"]
-NET_SERVICE_CODES: dict[str, str] = {
-    "pandora": "04",
-    "spotify": "0A",
-    "deezer": "12",
-    "tidal": "1B",
-    "amazon-music": "1C",
-    "airplay": "44",
-    "tunein": "0E",
-    "music-server": "00",
-}
-CODE_NET_SERVICES = {code: name for name, code in NET_SERVICE_CODES.items()}
-# Other sources the network player can be playing (NMS service icons; AirPlay
-# shows as 18 there even though it is selected as 44)
-CODE_NET_SERVICES |= {"18": "airplay", "F0": "usb", "F1": "usb", "F4": "bluetooth"}
-# NST play state: first character of the reply ("Pxx1" = playing)
-PLAY_STATES = {"P": "playing", "p": "paused", "S": "stopped", "F": "fast-forward", "R": "rewind", "E": "end"}
-
-# Zones 2 and 3 drive speakers in other rooms. Each zone has its own power,
-# volume, mute and input, with its own 3-letter command for each. Volumes and
-# input codes use the same scale and table as the main zone.
-Zone = Literal["main", "zone2", "zone3"]
-ZONE_CODES: dict[str, dict[str, str]] = {
-    "main": {"power": "PWR", "volume": "MVL", "mute": "AMT", "input": "SLI"},
-    "zone2": {"power": "ZPW", "volume": "ZVL", "mute": "ZMT", "input": "SLZ"},
-    "zone3": {"power": "PW3", "volume": "VL3", "mute": "MT3", "input": "SL3"},
-}
-ZONE_LABELS = {"main": "Main zone", "zone2": "Zone 2", "zone3": "Zone 3"}
-
-
 # The name is what the client sees in the initialize handshake (serverInfo.name).
 mcp = MCPServer("onkyo")
 
 
 # ---------------------------------------------------------------------------
-# eISCP transport layer (no MCP here; this is plain protocol code)
-#
-# Packet layout:
-#   "ISCP" | header size (u32 BE, always 16) | data size (u32 BE)
-#   | version (u8, 0x01) | 3 reserved bytes | data
-# Data is "!1" + 3-char command + parameter + terminator.
-#   e.g. "!1PWR01\r" = power on, "!1MVLQSTN\r" = query master volume
-# Responses look like "!1MVL28\x1a\r\n" (volume is hex: 0x28 = 40).
+# eISCP transport: eiscp.py (plain protocol code, no MCP). These wrappers
+# supply this server's settings (address, port, timeout).
 # ---------------------------------------------------------------------------
-
-
-def build_packet(command: str, unit: str = "1") -> bytes:
-    # unit "1" = receiver; "x" = any device type (used for discovery)
-    data = f"!{unit}{command}\r".encode("ascii")
-    # struct format: ">" big-endian, "I" u32 header size, "I" u32 data size,
-    # "B" u8 version, "3x" three zero padding bytes. 4 + 4 + 4 + 1 + 3 = 16.
-    return b"ISCP" + struct.pack(">IIB3x", 16, len(data), 1) + data
-
-
-def decode_datagram(packet: bytes) -> str:
-    """Decode one whole eISCP packet (as received over UDP)."""
-    magic, header_size, data_size, _version = struct.unpack(">4sIIB3x", packet[:16])
-    if magic != b"ISCP":
-        raise ValueError(f"Bad magic: {magic!r}")
-    data = packet[header_size : header_size + data_size]
-    # Same stripping as read_packet, plus \x19, which can also turn up at
-    # the end of a UDP reply.
-    return data.decode("utf-8", "replace")[2:].rstrip("\x19\x1a\r\n")
-
 
 DISCOVERY_ADDR = setting("ONKYO_DISCOVERY_ADDR", "255.255.255.255")
 
 
-async def discover(timeout: float = 3.0) -> list[dict]:
-    """Broadcast "!xECNQSTN" on UDP 60128. Each receiver replies with
-    "!1ECN<model>/<port>/<region>/<mac>", and the reply's source address is
-    its IP."""
-    # Keyed by IP, so a receiver that answers twice is only listed once
-    found: dict[str, dict] = {}
-
-    # asyncio calls datagram_received for every UDP packet that arrives on
-    # our socket, while discover() is sleeping below.
-    class Listener(asyncio.DatagramProtocol):
-        def datagram_received(self, data: bytes, addr: tuple) -> None:
-            try:
-                msg = decode_datagram(data)
-            except (ValueError, struct.error):
-                log.debug("eISCP <- %s (UDP) not eISCP, ignored: %r", addr[0], data[:32])
-                return  # not eISCP (some other device on the port): ignore it
-            log.debug("eISCP <- %s (UDP) %s", addr[0], msg)
-            if not msg.startswith("ECN"):
-                return
-            # Pad with blanks so a reply with missing fields still unpacks
-            model, port, region, mac = (msg[3:].split("/") + ["", "", "", ""])[:4]
-            # "0009B0123456" -> "00:09:B0:12:34:56"
-            mac = ":".join(mac[i : i + 2] for i in range(0, 12, 2)) if len(mac) >= 12 else mac
-            found[addr[0]] = {"host": addr[0], "model": model, "port": int(port or 60128), "region": region, "mac": mac}
-
-    loop = asyncio.get_running_loop()
-    # Port 0 = let the OS pick a free local port; replies come back to it.
-    transport, _ = await loop.create_datagram_endpoint(Listener, local_addr=("0.0.0.0", 0), allow_broadcast=True)
-    try:
-        log.debug("eISCP -> %s (UDP broadcast) ECNQSTN", DISCOVERY_ADDR)
-        transport.sendto(build_packet("ECNQSTN", unit="x"), (DISCOVERY_ADDR, PORT))
-        await asyncio.sleep(timeout)  # collect every reply that arrives in the window
-    finally:
-        transport.close()
-    return sorted(found.values(), key=lambda r: r["model"])
-
-
-async def read_packet(reader: asyncio.StreamReader) -> str:
-    """Read one eISCP packet from a TCP stream. TCP is a byte stream, not a
-    sequence of messages, so we read the fixed 16-byte header first to learn
-    how many data bytes follow."""
-    header = await reader.readexactly(16)
-    magic, header_size, data_size, _version = struct.unpack(">4sIIB3x", header)
-    if magic != b"ISCP":
-        raise ValueError(f"Bad magic: {magic!r}")
-    await reader.readexactly(header_size - 16)  # normally 0 bytes
-    data = await reader.readexactly(data_size)
-    # Strip "!1" prefix and the \x1a / \r / \n terminators. Text (track
-    # titles, station names) is UTF-8: "Beyoncé" must not become "Beyonc��".
-    return data.decode("utf-8", "replace")[2:].rstrip("\x1a\r\n")
+async def discover(timeout: float = 3.0) -> list[dict[str, str | int]]:
+    """Receivers that answer a discovery broadcast, as dicts (see eiscp.discover)."""
+    return [dataclasses.asdict(r) for r in await eiscp.discover(DISCOVERY_ADDR, PORT, timeout)]
 
 
 async def send(
@@ -289,61 +126,11 @@ async def send(
     host: str | None = None,
     until: Callable[[str], bool] | None = None,
 ) -> str | None:
-    """Send one command to `host` (default: ONKYO_HOST, required if unset). If `expect` is a
-    3-char prefix (e.g. "MVL"), wait for the matching reply. The receiver also
-    pushes unsolicited status messages, so we skip anything that doesn't match.
-
-    For a setter ("AMT01", as opposed to a query, "AMTQSTN"), the reply must
-    echo the value we sent, or be "N/A". A same-prefix message with another
-    value is a status push, not our answer: right after power-on a TX-NR7100
-    pushes "AMT00" while still ignoring commands, which would otherwise read as
-    "AMT01 failed".
-
-    `until`, if given, must also accept the reply's value: for replies that
-    can't be told apart by prefix alone (e.g. which menu layer an NLT is for).
-
-    Raises ConnectionError (an OSError) if it can't connect, and TimeoutError
-    if it connected but the reply never came (e.g. a receiver in standby)."""
-    # One short-lived connection per command: simpler than keeping a socket
-    # open, and it survives the receiver dropping idle connections.
+    """eiscp.send to `host` (default: ONKYO_HOST, required if unset)."""
     host = host or HOST
     if not host:
         raise ValueError("no receiver address: pass host, or set ONKYO_HOST")
-    timeout = timeout or TIMEOUT
-    try:
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, PORT), timeout)
-    except TimeoutError:
-        # Re-raised as a different type, so callers can tell "couldn't
-        # connect" apart from "connected, but no reply" (TimeoutError below).
-        raise ConnectionError(f"timed out connecting to {host}:{PORT}") from None
-    try:
-        log.debug("eISCP -> %s %s", host, command)
-        writer.write(build_packet(command))
-        await writer.drain()
-        if expect is None:
-            return None
-        sent_value = command[len(expect) :]  # "AMT01" -> "01", "AMTQSTN" -> "QSTN"
-        is_setter = command.startswith(expect) and sent_value != "QSTN"
-
-        async def wait_for_match() -> str:
-            while True:
-                msg = await read_packet(reader)
-                value = msg[len(expect) :]  # "MVL50" -> "50"
-                if (
-                    msg.startswith(expect)
-                    and (not is_setter or value in (sent_value, "N/A"))
-                    and (until is None or until(value))
-                ):
-                    log.debug("eISCP <- %s %s", host, msg)
-                    return value
-                log.debug("eISCP <- %s %s (unsolicited, skipped)", host, msg)
-
-        # One timeout around the whole loop, so a chatty receiver that never
-        # sends the reply we want can't keep us waiting forever.
-        return await asyncio.wait_for(wait_for_match(), timeout)
-    finally:
-        writer.close()
-        await writer.wait_closed()
+    return await eiscp.send(host, PORT, command, expect, timeout or TIMEOUT, until)
 
 
 # Each receiver describes itself in XML (NRIQSTN): model, inputs, network
