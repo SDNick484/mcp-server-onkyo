@@ -33,6 +33,7 @@ async def test_tools_list(client):
         "set_input",
         "set_listening_mode",
         "select_net_service",
+        "list_net_services",
         "get_now_playing",
         "list_stations",
         "play_station",
@@ -315,7 +316,7 @@ async def test_same_as_main_only_for_other_zones(client, receiver):
 
 async def test_select_net_service(client, receiver):
     result = await client.call_tool("select_net_service", {"service": "pandora"})
-    assert text(result) == "Network service is now Pandora"
+    assert text(result).startswith("Network service is now Pandora")
     assert receiver["NLT"].startswith("04")
 
 
@@ -388,7 +389,7 @@ async def test_list_stations_only_music(client, receiver):
 
 async def test_play_station_by_partial_name(client, receiver, fake):
     result = await client.call_tool("play_station", {"station": "pearl jam"})
-    assert text(result) == "Playing Pearl Jam Radio on pandora"
+    assert text(result).startswith("Playing Pearl Jam Radio on pandora")
     assert fake.selected == [3]  # the first Pearl Jam Radio
     playing = json.loads(text(await client.call_tool("get_now_playing", {})))
     assert (playing["station"], playing["state"], playing["title"]) == ("Pearl Jam Radio", "playing", "Black")
@@ -437,7 +438,9 @@ async def test_playing_station_still_listed_and_playable(client, receiver):
     await client.call_tool("play_station", {"station": "Beyoncé Radio"})
     result = await client.call_tool("list_stations", {})
     assert json.loads(text(result))["playable"] == ["Shuffle", "Pearl Jam Radio", "Beyoncé Radio"]
-    assert text(await client.call_tool("play_station", {"station": "beyoncé"})) == "Playing Beyoncé Radio on pandora"
+    assert text(await client.call_tool("play_station", {"station": "beyoncé"})).startswith(
+        "Playing Beyoncé Radio on pandora"
+    )
 
 
 async def test_no_host_uses_the_one_discovered_receiver(fake, configure):
@@ -488,7 +491,7 @@ async def test_browse_folders(client, receiver):
 
 async def test_play_from_folder(client, receiver, fake):
     result = await client.call_tool("play_station", {"station": "jazz", "service": "tunein", "folder": ["My Presets"]})
-    assert text(result) == "Playing KCSM Jazz on tunein"
+    assert text(result).startswith("Playing KCSM Jazz on tunein")
     assert fake.selected == [2]  # position inside the folder
 
 
@@ -516,7 +519,7 @@ async def test_long_lists_are_read_in_pages(client, receiver):
     result = await client.call_tool(
         "play_station", {"station": "Track 237", "service": "music-server", "folder": ["Album", "Album 237"]}
     )
-    assert text(result) == "Playing Track 237 on music-server"
+    assert text(result).startswith("Playing Track 237 on music-server")
 
 
 async def test_volume_cap_off_the_step_grid_is_never_exceeded(fake, configure):
@@ -587,3 +590,44 @@ async def test_zone_without_volume_control_reports_none(client, receiver):
     receiver["NRI"] = receiver["NRI"].replace('name="Zone2" volmax="100"', 'name="Zone2" volmax="0"')
     z2 = zones(await client.call_tool("get_status", {}))["zone2"]
     assert (z2["volume"], z2["volume_control"]) == (None, False)
+
+
+async def test_playing_with_no_zone_on_net_says_nothing_will_be_heard(client, receiver):
+    result = await client.call_tool("play_station", {"station": "Shuffle"})
+    assert 'No zone is on input "net" yet' in text(result)
+
+
+async def test_playing_with_one_zone_on_net_has_no_warning(client, receiver):
+    receiver["SLI"] = "2B"
+    assert text(await client.call_tool("play_station", {"station": "Shuffle"})) == "Playing Shuffle on pandora"
+
+
+async def test_service_change_warns_when_two_zones_share_the_player(client, receiver):
+    receiver.update(SLI="2B", ZPW="01", SLZ="2B")
+    result = await client.call_tool("select_net_service", {"service": "tunein"})
+    assert text(result) == (
+        'Network service is now TuneIn Radio. Note: Main zone and Zone 2 are both on "net", and a receiver has '
+        "one network player, so both hear this. To keep one zone out, give it another input."
+    )
+
+
+async def test_putting_a_second_zone_on_net_says_it_follows_the_first(client, receiver):
+    receiver.update(SLI="2B", ZPW="01")
+    result = await client.call_tool("set_input", {"source": "net", "zone": "zone2"})
+    assert text(result).startswith("Zone 2: Input is now net. It now plays the same network audio as Main zone")
+
+
+async def test_list_net_services(client, receiver):
+    result = (await client.call_tool("list_net_services", {})).structured_content
+    by_code = {s["code"]: s for s in result["services"]}
+    assert by_code["04"] == {"code": "04", "receiver_name": "Pandora", "name": "pandora", "selectable": True}
+    assert by_code["44"]["name"] == "airplay"
+    assert result["receiver"] == "127.0.0.1"
+
+
+async def test_list_net_services_shows_ones_this_server_cant_select(client, receiver):
+    receiver["NRI"] = receiver["NRI"].replace(
+        "</netservicelist>", '<netservice id="13" value="1" name="iHeartRadio"/></netservicelist>'
+    )
+    services = (await client.call_tool("list_net_services", {})).structured_content["services"]
+    assert {"code": "13", "receiver_name": "iHeartRadio", "name": None, "selectable": False} in services

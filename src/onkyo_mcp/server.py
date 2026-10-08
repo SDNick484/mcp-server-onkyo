@@ -427,6 +427,48 @@ async def receiver_status(c: Call, only: Zone | None) -> ReceiverStatus:
     }
 
 
+# --- the shared network player -----------------------------------------------------------
+# A receiver has ONE network player. Every zone whose input is "net" plays
+# it, so a service or station chosen "for Zone 2" also changes what the main
+# zone hears if the main zone is on "net" too. The eISCP commands (NSV, NLS,
+# NTC) don't name a zone, so there is no way to give zones different network
+# audio; the tools say so instead of letting it surprise anyone.
+async def zones_on_net(c: Call) -> list[Zone]:
+    """The zones that are on with input "net". Best effort: a zone that
+    doesn't answer is left out (this only feeds warnings)."""
+    on_net: list[Zone] = []
+    for zone in await zones_of(c):
+        codes = ZONE_CODES[zone]
+        try:
+            power = await c.session.request(f"{codes['power']}QSTN", codes["power"])
+            source = await c.session.request(f"{codes['input']}QSTN", codes["input"])
+        except _READ_ERRORS:
+            continue
+        if power == "01" and source == SOURCE_CODES["net"]:
+            on_net.append(zone)
+    return on_net
+
+
+def with_note(message: str, note: str) -> str:
+    return f"{message}. {note}" if note else message
+
+
+def shared_player_note(on_net: list[Zone]) -> str:
+    """One sentence about who will hear the network player, or ""."""
+    names = [ZONE_LABELS[z] for z in on_net]
+    if not names:
+        return (
+            'No zone is on input "net" yet, so nothing will be heard: use set_input with source="net" for the '
+            "zone that should play it."
+        )
+    if len(names) > 1:
+        return (
+            f'Note: {" and ".join(names)} are both on "net", and a receiver has one network player, so both '
+            "hear this. To keep one zone out, give it another input."
+        )
+    return ""
+
+
 @mcp.tool(title="Get receiver status", annotations=READ_ONLY)
 async def get_status(receiver: ReceiverArg = None, zone: ZoneFilter = None) -> Status:
     """Start here. For each receiver, each zone's power, volume (0-100), the
@@ -562,12 +604,21 @@ async def set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg 
         await check_zone(c, zone)
         code = ZONE_CODES[zone]["input"]
         reply = await c.ask(f"{code}{SOURCE_CODES[source]}", code, zone=zone)
+        note = ""
+        if reply != "N/A" and source == "net":
+            others = [z for z in await zones_on_net(c) if z != zone]
+            if others:
+                listing = " and ".join(ZONE_LABELS[z] for z in others)
+                note = (
+                    f"It now plays the same network audio as {listing}: a receiver has one network player, so "
+                    'changing the service or station changes it in every zone on "net".'
+                )
     if reply == "N/A":
         raise ReceiverError(
             f"{zone_prefix(zone)}The receiver rejected input {source!r}. Is the zone on, and does this model "
             "have that input?"
         )
-    return f"{zone_prefix(zone)}Input is now {CODE_SOURCES.get(reply, f'{code}{reply}')}"
+    return with_note(f"{zone_prefix(zone)}Input is now {CODE_SOURCES.get(reply, f'{code}{reply}')}", note)
 
 
 @mcp.tool(title="Set listening mode", annotations=SETTER)
@@ -608,9 +659,49 @@ async def select_net_service(service: NetService, receiver: ReceiverArg = None) 
             no_reply=f"The receiver didn't switch to {service}. It may not offer {service}, "
             "or it isn't signed in: check in the Onkyo Controller app.",
         )
+        note = shared_player_note(await zones_on_net(c)) if reply[:1] not in ("3", "4") else ""
     if reply[:1] in ("3", "4"):  # the screen is a popup or keyboard, not the service's menu
         raise ReceiverError(not_ready(service, reply[20:]))
-    return f"Network service is now {reply[20:] or service}"
+    return with_note(f"Network service is now {reply[20:] or service}", note)
+
+
+class NetServiceInfo(TypedDict):
+    code: str  # the receiver's NSV code
+    receiver_name: str  # what the receiver calls it
+    name: str | None  # what select_net_service calls it; None if this server has no name for it
+    selectable: bool
+
+
+class NetServices(TypedDict):
+    receiver: str
+    services: list[NetServiceInfo]
+
+
+@mcp.tool(title="List network services", annotations=READ_ONLY)
+async def list_net_services(receiver: ReceiverArg = None) -> NetServices:
+    """The streaming services this receiver offers, as it lists them itself.
+    selectable=true ones can be passed to select_net_service (by `name`);
+    others are listed so you can tell the user they exist but this server
+    can't switch to them yet. A service still has to be signed in to play."""
+    async with call(receiver) as c:
+        try:
+            layout = await c.session.layout()
+        except _READ_ERRORS:
+            layout = None
+        label = c.receiver.label
+    if layout is None or not layout.net_services:
+        raise ReceiverError(
+            f"{label} doesn't list its network services (older models don't describe themselves). "
+            f"select_net_service still accepts: {', '.join(NET_SERVICE_CODES)}."
+        )
+    names = {code: name for name, code in NET_SERVICE_CODES.items()}
+    return {
+        "receiver": label,
+        "services": [
+            {"code": code, "receiver_name": shown, "name": names.get(code), "selectable": code in names}
+            for code, shown in sorted(layout.net_services.items())
+        ],
+    }
 
 
 def not_ready(service: str, screen: str) -> str:
@@ -863,7 +954,8 @@ async def play_station(
             timeout=3 * c.settings.timeout,
             no_reply=f"{title} was selected but didn't start playing.",
         )
-    return f"Playing {title} on {service}"
+        note = shared_player_note(await zones_on_net(c))
+    return with_note(f"Playing {title} on {service}", note)
 
 
 PlaybackAction = Literal["play", "pause", "stop", "next", "previous"]
