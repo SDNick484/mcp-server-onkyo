@@ -117,3 +117,16 @@ ZONE_CODES: dict[str, dict[str, str]] = {
     "zone3": {"power": "PW3", "volume": "VL3", "mute": "MT3", "input": "SL3"},
 }
 ZONE_LABELS = {"main": "Main zone", "zone2": "Zone 2", "zone3": "Zone 3"}
+
+
+# --- volume -------------------------------------------------------------------
+# Volumes are hex raw steps. With 2 steps per display unit (2021+ models),
+# raw 0x00-0xC8 is 0.0-100.0 on the front panel: "50" -> 80 raw -> 40.0.
+def raw_to_volume(raw: str, steps: int) -> float:
+    return int(raw, 16) / steps
+
+
+def volume_to_raw(volume: float, steps: int) -> str:
+    # 40.0 -> 80 raw steps -> "50". round() snaps e.g. 40.3 to the nearest
+    # step the receiver supports; :02X is the two-digit uppercase hex it expects.
+    return f"{round(volume * steps):02X}"

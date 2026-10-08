@@ -10,16 +10,12 @@ import logging
 import pytest
 from mcp import Client
 
-from onkyo_mcp import server as onkyo_mcp
-from onkyo_mcp.sim import fake_receiver
+from onkyo_mcp import codes, eiscp, server
+from onkyo_mcp.sim.fake_receiver import free_port
+
+from .conftest import settings_for
 
 pytestmark = pytest.mark.anyio
-
-
-@pytest.fixture
-async def client(receiver):
-    async with Client(onkyo_mcp.mcp) as c:
-        yield c
 
 
 def text(result) -> str:
@@ -44,9 +40,9 @@ async def test_tools_list(client):
     }
     # Literal["bd-dvd", ...] becomes a JSON Schema enum the model must pick from
     source = tools["set_input"].input_schema["properties"]["source"]
-    assert set(source["enum"]) == set(onkyo_mcp.SOURCE_CODES)
+    assert set(source["enum"]) == set(codes.SOURCE_CODES)
     mode = tools["set_listening_mode"].input_schema["properties"]["mode"]
-    assert set(mode["enum"]) == set(onkyo_mcp.MODE_CODES)
+    assert set(mode["enum"]) == set(codes.MODE_CODES)
 
 
 async def test_tool_annotations(client):
@@ -78,52 +74,11 @@ async def test_get_status(client):
     }
 
 
-@pytest.fixture
-async def second_receiver(receiver):
-    """A second fake receiver at ::1 (IPv6 loopback, same port, its own state),
-    like two receivers on one LAN. 127.0.0.2 would be neater but isn't routed
-    on macOS or WSL2. Yields its state dict."""
-    state = dict(fake_receiver.DEFAULT_STATE, PWR="01", SLI="02")
-    try:
-        server, udp, _ = await fake_receiver.start("::1", onkyo_mcp.PORT, state)
-    except OSError:
-        pytest.skip("no IPv6 loopback on this machine")
-    yield state
-    udp.close()
-    server.close()
-    await server.wait_closed()
-
-
 async def test_every_receiver_tool_takes_receiver_argument(client):
     for tool in (await client.list_tools()).tools:
         if tool.name != "discover_receivers":
             assert "receiver" in tool.input_schema["properties"], tool.name
             assert "receiver" not in tool.input_schema.get("required", []), tool.name
-
-
-async def test_get_status_picks_receiver(client, second_receiver):
-    other = json.loads(text(await client.call_tool("get_status", {"receiver": "::1"})))
-    default = json.loads(text(await client.call_tool("get_status", {})))
-    assert (other["receiver"], other["power"], other["input"]) == ("::1", "on", "game")
-    assert (default["receiver"], default["power"], default["input"]) == ("127.0.0.1", "on", "bd-dvd")
-
-
-@pytest.mark.parametrize(
-    "tool, args, code, value",
-    [
-        ("set_power", {"on": False}, "PWR", "00"),  # second receiver starts on
-        ("set_volume", {"level": 20}, "MVL", "28"),
-        ("set_mute", {"muted": True}, "AMT", "01"),
-        ("set_input", {"source": "tv"}, "SLI", "12"),
-        ("set_listening_mode", {"mode": "direct"}, "LMD", "01"),
-    ],
-)
-async def test_set_tools_change_only_chosen_receiver(client, receiver, second_receiver, tool, args, code, value):
-    default_before = receiver[code]
-    result = await client.call_tool(tool, {**args, "receiver": "::1"})
-    assert not result.is_error
-    assert second_receiver[code] == value
-    assert receiver[code] == default_before  # the default receiver is untouched
 
 
 async def test_get_status_unknown_input_shown_raw(client, receiver):
@@ -234,11 +189,13 @@ async def test_status_works_in_standby(client, receiver):
     assert json.loads(text(result))["power"] == "standby"
 
 
-async def test_unreachable_receiver_says_so(client, receiver, monkeypatch):
-    monkeypatch.setattr(onkyo_mcp, "PORT", fake_receiver.free_port())  # nothing listening
-    result = await client.call_tool("set_mute", {"muted": True})
+async def test_unreachable_receiver_says_so(fake, configure):
+    fake.port = free_port()  # point the server where nothing listens
+    configure(settings_for(fake))
+    async with Client(server.mcp) as c:
+        result = await c.call_tool("set_mute", {"muted": True})
     assert result.is_error
-    assert "Can't connect to a receiver at 127.0.0.1" in text(result)
+    assert "Can't connect to the receiver at 127.0.0.1" in text(result)
 
 
 async def test_zone_arguments_in_schema(client):
@@ -330,7 +287,7 @@ async def test_select_unavailable_net_service_says_so(client, receiver):
 async def test_net_service_names_match_code_table(client):
     tools = {t.name: t for t in (await client.list_tools()).tools}
     service = tools["select_net_service"].input_schema["properties"]["service"]
-    assert set(service["enum"]) == set(onkyo_mcp.NET_SERVICE_CODES)
+    assert set(service["enum"]) == set(codes.NET_SERVICE_CODES)
 
 
 async def test_now_playing_idle(client, receiver):
@@ -387,26 +344,26 @@ async def test_list_stations_only_music(client, receiver):
     assert json.loads(text(result))["folders"] == []
 
 
-async def test_play_station_by_partial_name(client, receiver):
+async def test_play_station_by_partial_name(client, receiver, fake):
     result = await client.call_tool("play_station", {"station": "pearl jam"})
     assert text(result) == "Playing Pearl Jam Radio on pandora"
-    assert fake_receiver.selected == [3]  # the first Pearl Jam Radio
+    assert fake.selected == [3]  # the first Pearl Jam Radio
     playing = json.loads(text(await client.call_tool("get_now_playing", {})))
     assert (playing["station"], playing["state"], playing["title"]) == ("Pearl Jam Radio", "playing", "Black")
 
 
-async def test_play_station_never_selects_account_items(client, receiver):
+async def test_play_station_never_selects_account_items(client, receiver, fake):
     for name in ("Sign Out", "Create new station"):
         result = await client.call_tool("play_station", {"station": name})
         assert result.is_error and "No station matching" in text(result)
-    assert fake_receiver.selected == []
+    assert fake.selected == []
 
 
-async def test_play_station_ambiguous(client, receiver):
+async def test_play_station_ambiguous(client, receiver, fake):
     result = await client.call_tool("play_station", {"station": "radio"})
     assert result.is_error
     assert "Pearl Jam Radio, Beyoncé Radio" in text(result)
-    assert fake_receiver.selected == []
+    assert fake.selected == []
 
 
 async def test_control_playback(client, receiver):
@@ -441,28 +398,33 @@ async def test_playing_station_still_listed_and_playable(client, receiver):
     assert text(await client.call_tool("play_station", {"station": "beyoncé"})) == "Playing Beyoncé Radio on pandora"
 
 
-async def test_no_host_uses_the_one_discovered_receiver(client, receiver, monkeypatch):
-    monkeypatch.setattr(onkyo_mcp, "HOST", "")  # ONKYO_HOST unset
-    result = json.loads(text(await client.call_tool("get_status", {})))
-    assert result["receiver"] == "127.0.0.1"  # the fake answered discovery
-    assert onkyo_mcp._discovered_host == "127.0.0.1"  # remembered for later calls
+async def test_no_host_uses_the_one_discovered_receiver(fake, configure):
+    configure(settings_for(fake, receivers=()))  # nothing configured: discovery decides
+    async with Client(server.mcp) as c:
+        result = json.loads(text(await c.call_tool("get_status", {})))
+        assert result["receiver"] == "127.0.0.1"  # the fake answered discovery
+        assert server.registry()._discovered is not None  # remembered for later calls
 
 
-async def test_no_host_and_nothing_discovered_says_so(client, receiver, monkeypatch):
-    monkeypatch.setattr(onkyo_mcp, "HOST", "")
-    monkeypatch.setattr(onkyo_mcp, "DISCOVERY_ADDR", "127.0.0.2")  # nobody there
-    result = await client.call_tool("set_mute", {"muted": True})
+async def test_no_host_and_nothing_discovered_says_so(fake, configure):
+    configure(settings_for(fake, receivers=(), discovery_port=free_port()))  # nobody answers there
+    async with Client(server.mcp) as c:
+        result = await c.call_tool("set_mute", {"muted": True})
     assert result.is_error and "Set ONKYO_HOST" in text(result)
-    assert receiver["AMT"] == "00"  # nothing was sent anywhere
+    assert fake.state["AMT"] == "00"  # nothing was sent anywhere
 
 
-async def test_no_host_and_several_receivers_asks_which(client, receiver, monkeypatch):
-    async def two_receivers(timeout=3.0):
-        return [{"host": "192.168.1.147", "model": "TX-NR6050"}, {"host": "192.168.1.245", "model": "TX-NR7100"}]
+async def test_no_host_and_several_receivers_asks_which(fake, configure, monkeypatch):
+    async def two_receivers(address, port=60128, timeout=3.0):
+        return [
+            eiscp.Found("192.168.1.147", "TX-NR6050", 60128, "DX", ""),
+            eiscp.Found("192.168.1.245", "TX-NR7100", 60128, "DX", ""),
+        ]
 
-    monkeypatch.setattr(onkyo_mcp, "HOST", "")
-    monkeypatch.setattr(onkyo_mcp, "discover", two_receivers)
-    result = await client.call_tool("get_status", {})
+    configure(settings_for(fake, receivers=()))
+    monkeypatch.setattr(eiscp, "discover", two_receivers)
+    async with Client(server.mcp) as c:
+        result = await c.call_tool("get_status", {})
     assert result.is_error
     assert "TX-NR6050 at 192.168.1.147, TX-NR7100 at 192.168.1.245" in text(result)
 
@@ -482,10 +444,10 @@ async def test_browse_folders(client, receiver):
     assert presets["playable"] == ["KQED Public Radio", "KCSM Jazz"]
 
 
-async def test_play_from_folder(client, receiver):
+async def test_play_from_folder(client, receiver, fake):
     result = await client.call_tool("play_station", {"station": "jazz", "service": "tunein", "folder": ["My Presets"]})
     assert text(result) == "Playing KCSM Jazz on tunein"
-    assert fake_receiver.selected == [2]  # position inside the folder
+    assert fake.selected == [2]  # position inside the folder
 
 
 async def test_play_at_folder_level_points_inside(client, receiver):

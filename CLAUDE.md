@@ -6,12 +6,24 @@ so explain the *why* of MCP concepts as you go and prefer small, readable
 changes over clever ones. Show the JSON-RPC traffic when it helps.
 
 ## Layout
-- `src/onkyo_mcp/server.py` — the server. Two layers: eISCP transport (plain protocol code)
-  and MCP tools (`@mcp.tool()` functions). Keep MCP concerns out of the transport layer.
+- `src/onkyo_mcp/eiscp.py` — the protocol: framing, `Connection`, discovery. No MCP here.
+- `src/onkyo_mcp/codes.py` — command tables (`Literal` names + code dicts) and volume conversion. Pure data.
+- `src/onkyo_mcp/config.py` — `Settings`: receivers (`config.json` / `ONKYO_HOSTS`), names, per-zone
+  volume caps, timeouts. Loading never raises; problems become `Settings.problems`.
+- `src/onkyo_mcp/receivers.py` — `Registry` (which receiver a call means) and `Receiver` (its lock,
+  its cached NRI layout). `ReceiverError` is the `ToolError` for anything the model can act on.
+- `src/onkyo_mcp/server.py` — MCP tools. Each runs inside `async with call(receiver) as c:`.
 - `src/onkyo_mcp/remote.py` — Streamable HTTP behind Cloudflare Access. Shared, byte-identical,
   with mcp-server-shieldtv, -harmony and -sofabaton: change it in all four.
 - `src/onkyo_mcp/sim/fake_receiver.py` — simulated receiver on 127.0.0.1:60128 for
   hardware-free dev (`python -m onkyo_mcp.sim.fake_receiver`).
+
+## Rules for changes
+- **Several receivers: never guess.** Without `receiver`, act only when exactly one is configured
+  (or, with none configured, exactly one answers discovery). Otherwise raise a `ReceiverError` that
+  names them. A guess turns off the wrong room.
+- **One exchange at a time per receiver.** Talk to a receiver only inside `call()` (or
+  `Receiver.session()`), which holds its lock and one connection for the whole tool call.
 
 ## Conventions
 - Python 3.11+, official `mcp` SDK v2 (MCPServer, formerly FastMCP), asyncio only (no threads).
