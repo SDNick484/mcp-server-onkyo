@@ -1,6 +1,6 @@
 [project]
 name = "mcp-server-onkyo"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for controlling Onkyo AV receivers over eISCP"
 readme = "README.md"
 license = "MIT"

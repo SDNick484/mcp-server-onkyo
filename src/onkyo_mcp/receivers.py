@@ -118,7 +118,8 @@ class Receiver:
 
     def describe(self) -> str:
         """For messages: "Family Room (TX-NR6050 at 192.168.1.147)"."""
-        bits = " at ".join(b for b in (self.model, self.host) if b)
+        address = self.host if self.port == eiscp.DEFAULT_PORT else f"{self.host}:{self.port}"
+        bits = " at ".join(b for b in (self.model, address) if b)
         return f"{self.settings.name} ({bits})" if self.settings.name else bits
 
     def answers_to(self, ref: str) -> bool:
