@@ -778,39 +778,3 @@ async def control_playback(action: PlaybackAction, receiver: ReceiverArg = None)
         "The track didn't change. The service may not allow that "
         "right now (Pandora limits skips per hour and can't go back)."
     )
-
-
-def main(argv: list[str] | None = None) -> None:
-    import argparse
-    import sys
-
-    from . import remote
-
-    parser = argparse.ArgumentParser(prog="mcp-server-onkyo", description="MCP server for Onkyo receivers")
-    parser.add_argument("--debug", action="store_true", help="log MCP and eISCP traffic to stderr")
-    parser.add_argument("--discover", action="store_true", help="list receivers on the LAN and exit")
-    remote.add_http_arguments(parser, default_port=8711, default_path="/onkyo/mcp")
-    args = parser.parse_args(argv)
-    settings = load_settings()
-
-    if settings.debug or args.debug:
-        enable_debug()
-
-    if args.discover:  # quick CLI check, no MCP involved
-        receivers = asyncio.run(eiscp.discover(settings.discovery_addr, settings.discovery_port))
-        for r in receivers:
-            print(f"{r.host:<16} {r.model:<12} {r.mac}  port {r.port}")
-        if not receivers:
-            print("No receivers answered. See README: Troubleshooting.", file=sys.stderr)
-    elif args.http:
-        # A long-lived HTTP service, e.g. in an LXC behind Cloudflare Access
-        # (see remote.py). Its logs go to stderr like everything else.
-        logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
-        try:
-            remote.serve_http(mcp, remote.http_config(args))
-        except remote.ConfigError as exc:
-            parser.exit(2, f"mcp-server-onkyo: {exc}\n")
-    else:
-        # Defaults to stdio transport: JSON-RPC over stdin/stdout, which is why
-        # nothing in the server may print() to stdout.
-        mcp.run()

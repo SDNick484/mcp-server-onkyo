@@ -28,7 +28,7 @@ Issues = "https://github.com/SDNick484/mcp-server-onkyo/issues"
 dev = ["pytest>=8", "anyio>=4", "httpx2", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
-mcp-server-onkyo = "onkyo_mcp.server:main"
+mcp-server-onkyo = "onkyo_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]
