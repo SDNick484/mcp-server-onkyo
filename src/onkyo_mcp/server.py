@@ -26,7 +26,6 @@ Log MCP and eISCP traffic to stderr (either works; also with --discover):
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -175,6 +174,12 @@ mcp.middleware.append(log_traffic)
 _READ_ERRORS = (OSError, ValueError, asyncio.IncompleteReadError)  # OSError includes TimeoutError
 
 
+def is_write(command: str) -> bool:
+    """Does this command change anything? Queries ("PWRQSTN") and menu-list
+    reads ("NLAL...") don't; everything else is treated as a write."""
+    return not (command.endswith("QSTN") or command.startswith("NLA"))
+
+
 class Call:
     """One tool call's exchange with one receiver."""
 
@@ -183,6 +188,8 @@ class Call:
         self.session = session
         self.settings = settings
         self.steps = settings.steps_for(receiver.settings)
+        self.dry_run = settings.dry_run
+        self.sent: list[str] = []  # commands that change something, as sent (for ActionResult.sent)
 
     @property
     def host(self) -> str:
@@ -210,6 +217,10 @@ class Call:
         `no_reply` replaces the guesswork below with a specific message, for
         commands where silence has an obvious meaning."""
         power_code = ZONE_CODES[zone]["power"]
+        if is_write(command):
+            # Setters check dry-run before calling ask(); this is the backstop.
+            assert not self.dry_run, f"dry-run must not send {command}"
+            self.sent.append(command)
         try:
             return await self.session.request(command, expect, timeout, until)
         except TimeoutError as exc:
@@ -253,6 +264,9 @@ class Call:
 
     async def tell(self, command: str) -> None:
         """Send without waiting for a reply."""
+        if is_write(command):
+            assert not self.dry_run, f"dry-run must not send {command}"
+            self.sent.append(command)
         try:
             await self.session.write(command)
         except OSError as exc:
@@ -299,14 +313,24 @@ SETTER = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempoten
 PLAYBACK = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 
 
+class FoundReceiver(TypedDict):
+    host: str
+    model: str
+    port: int
+    region: str
+    mac: str
+
+
 # Discovery reads nothing but replies, so it is read-only. It is open-world,
 # though: it broadcasts to the whole LAN and lists whatever answers.
 @mcp.tool(title="Discover receivers", annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
-async def discover_receivers() -> list[dict[str, Any]]:
+async def discover_receivers() -> list[FoundReceiver]:
     """Find Onkyo/Integra/Pioneer receivers on the local network. Returns each
-    receiver's IP address, model, eISCP port and MAC address."""
+    receiver's IP address, model, eISCP port and MAC address. Not needed when
+    receivers are configured: get_status lists those by name."""
     s = registry().settings
-    return [dataclasses.asdict(r) for r in await eiscp.discover(s.discovery_addr, s.discovery_port)]
+    found = await eiscp.discover(s.discovery_addr, s.discovery_port)
+    return [{"host": r.host, "model": r.model, "port": r.port, "region": r.region, "mac": r.mac} for r in found]
 
 
 # Optional: with one receiver configured (or found), it's the default.
@@ -322,6 +346,10 @@ ReceiverArg = Annotated[
 # Constraints in the type become JSON Schema the model sees ("minimum": 0,
 # "maximum": 100), and the SDK rejects anything outside before our code runs.
 VolumeLevel = Annotated[float, Field(ge=0, le=100, description="Volume on the front panel's 0-100 scale.")]
+
+# "off" is standby: on these receivers nothing turns fully off over the network
+# (Network Standby keeps the network side listening, so "on" works later).
+PowerState = Literal["on", "off"]
 
 # Optional too, defaulting to the main zone (the room the receiver is in)
 ZoneArg = Annotated[
@@ -451,10 +479,6 @@ async def zones_on_net(c: Call) -> list[Zone]:
     return on_net
 
 
-def with_note(message: str, note: str) -> str:
-    return f"{message}. {note}" if note else message
-
-
 def shared_player_note(on_net: list[Zone]) -> str:
     """One sentence about who will hear the network player, or ""."""
     names = [ZONE_LABELS[z] for z in on_net]
@@ -528,37 +552,79 @@ async def check_zone(c: Call, zone: Zone, volume: bool = False) -> None:
         )
 
 
-def zone_prefix(zone: Zone) -> str:
-    # Replies for the main zone read as before ("Volume is now 30.0"); other
-    # zones say which one they're about ("Zone 2: Volume is now 30.0").
-    return "" if zone == "main" else f"{ZONE_LABELS[zone]}: "
+def zone_prefix(zone: Zone | None) -> str:
+    # Main-zone details read plainly ("Volume is now 30.0"); other zones say
+    # which one they're about ("Zone 2: Volume is now 30.0").
+    return "" if zone in (None, "main") else f"{ZONE_LABELS[zone]}: "
+
+
+# --- what a setter returns ---------------------------------------------------------------
+# Every tool that changes something returns an ActionResult (the same shape as
+# the sibling servers' results): structured, so a client can read `outcome`
+# and `sent` without parsing prose, and `detail` is one sentence for the user.
+# Failures aren't an outcome: they're isError results (ReceiverError).
+class ActionResult(TypedDict):
+    receiver: str
+    zone: Zone | None  # None: not about a zone (listening mode is main-only; network player is shared)
+    outcome: Literal["done", "dry_run"]
+    detail: str  # one sentence for the user
+    sent: list[str]  # eISCP commands sent, in order (in dry-run: that would have been sent)
+    warnings: list[str]  # things the user should know, e.g. two zones sharing the network player
+
+
+def result(c: Call, zone: Zone | None, detail: str, warnings: list[str] | None = None) -> ActionResult:
+    return {
+        "receiver": c.receiver.label,
+        "zone": zone,
+        "outcome": "done",
+        "detail": detail,
+        "sent": list(c.sent),
+        "warnings": warnings or [],
+    }
+
+
+def dry_run(c: Call, zone: Zone | None, would: str, commands: list[str]) -> ActionResult:
+    """DRY RUN: what a setter would send, with nothing sent. Reads (zone checks,
+    menus) still happen, so a dry run catches the same mistakes a real call would."""
+    return {
+        "receiver": c.receiver.label,
+        "zone": zone,
+        "outcome": "dry_run",
+        "detail": f"DRY RUN, nothing sent: would {would}",
+        "sent": commands,
+        "warnings": [],
+    }
 
 
 @mcp.tool(title="Set power", annotations=SETTER)
-async def set_power(on: bool, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> str:
-    """Turn any zone on or into standby: the main zone by default, or another
+async def set_power(state: PowerState, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
+    """Turn a zone on, or off (standby): the main zone by default, or another
     room with zone="zone2" / "zone3". Zones are independent: zone2 can play
     while the main zone is in standby. After power-on, some receivers need
     about 15 seconds before they accept other commands."""
     async with call(receiver) as c:
         await check_zone(c, zone)
         code = ZONE_CODES[zone]["power"]
+        command = f"{code}01" if state == "on" else f"{code}00"
+        if c.dry_run:
+            return dry_run(c, zone, f"turn {ZONE_LABELS[zone]} {state}", [command])
         # Power changes are slow to confirm (a TX-NR7100 takes ~10s to reach standby)
-        timeout = 3 * c.settings.timeout
-        reply = await c.ask(f"{code}01" if on else f"{code}00", code, timeout=timeout, zone=zone)
-    if reply == "N/A":
-        raise ReceiverError(f"The receiver rejected the command: it may not have {ZONE_LABELS[zone]}.")
-    if reply == "01":
-        # The TX-NR7100 confirms power-on, then ignores commands for ~15s
-        return (
-            f"{zone_prefix(zone)}Power is now on. Some receivers need about 15 "
-            "seconds to start up before they accept other commands."
-        )
-    return f"{zone_prefix(zone)}Power is now standby"
+        reply = await c.ask(command, code, timeout=3 * c.settings.timeout, zone=zone)
+        if reply == "N/A":
+            raise ReceiverError(f"The receiver rejected the command: it may not have {ZONE_LABELS[zone]}.")
+        if reply == "01":
+            # The TX-NR7100 confirms power-on, then ignores commands for ~15s
+            return result(
+                c,
+                zone,
+                f"{zone_prefix(zone)}Power is now on",
+                ["Some receivers need about 15 seconds to start up before they accept other commands."],
+            )
+        return result(c, zone, f"{zone_prefix(zone)}Power is now standby")
 
 
 @mcp.tool(title="Set volume", annotations=SETTER)
-async def set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> str:
+async def set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
     """Set the volume of any zone: the main zone by default, or another room
     with zone="zone2" / "zone3". Uses the receiver's 0-100 display scale (0.5
     steps on newer models), the same for every zone. Each zone has a safety
@@ -568,33 +634,37 @@ async def set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zone: Zon
         await check_zone(c, zone, volume=True)
         cap = c.settings.cap(zone)
         code = ZONE_CODES[zone]["volume"]
-        reply = await c.ask(f"{code}{volume_to_raw(level, c.steps, cap)}", code, zone=zone)
-        steps = c.steps
-    if reply == "N/A":
-        raise ReceiverError(
-            f"{zone_prefix(zone)}The receiver rejected the volume change. The zone may be off, or its volume "
-            "may be fixed in the receiver's setup (zones that feed another amplifier often are)."
-        )
-    now = raw_to_volume(reply, steps)
-    note = f" (requested {level:g}, capped at {cap:g})" if level > cap else ""
-    return f"{zone_prefix(zone)}Volume is now {now}{note}"
+        raw = volume_to_raw(level, c.steps, cap)
+        capped = [f"Requested {level:g}, capped at {cap:g} (the owner's limit for this zone)."] if level > cap else []
+        if c.dry_run:
+            return dry_run(c, zone, f"set {ZONE_LABELS[zone]} volume to {raw_to_volume(raw, c.steps)}", [code + raw])
+        reply = await c.ask(code + raw, code, zone=zone)
+        if reply == "N/A":
+            raise ReceiverError(
+                f"{zone_prefix(zone)}The receiver rejected the volume change. The zone may be off, or its volume "
+                "may be fixed in the receiver's setup (zones that feed another amplifier often are)."
+            )
+        return result(c, zone, f"{zone_prefix(zone)}Volume is now {raw_to_volume(reply, c.steps)}", capped)
 
 
 @mcp.tool(title="Set mute", annotations=SETTER)
-async def set_mute(muted: bool, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> str:
+async def set_mute(muted: bool, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
     """Mute or unmute any zone: the main zone by default, or another room
     with zone="zone2" / "zone3"."""
     async with call(receiver) as c:
         await check_zone(c, zone)
         code = ZONE_CODES[zone]["mute"]
-        reply = await c.ask(f"{code}01" if muted else f"{code}00", code, zone=zone)
-    if reply == "N/A":
-        raise ReceiverError(f"{zone_prefix(zone)}The receiver rejected the mute change. Is the zone on?")
-    return zone_prefix(zone) + ("Muted" if reply == "01" else "Unmuted")
+        command = f"{code}01" if muted else f"{code}00"
+        if c.dry_run:
+            return dry_run(c, zone, f"{'mute' if muted else 'unmute'} {ZONE_LABELS[zone]}", [command])
+        reply = await c.ask(command, code, zone=zone)
+        if reply == "N/A":
+            raise ReceiverError(f"{zone_prefix(zone)}The receiver rejected the mute change. Is the zone on?")
+        return result(c, zone, zone_prefix(zone) + ("Muted" if reply == "01" else "Unmuted"))
 
 
 @mcp.tool(title="Select input", annotations=SETTER)
-async def set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> str:
+async def set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
     """Select the input of any zone: the main zone by default, or another
     room with zone="zone2" / "zone3". Names match the receiver's front-panel
     labels (e.g. "bd-dvd" for the BD/DVD input, "net" for network streaming).
@@ -605,43 +675,49 @@ async def set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg 
     async with call(receiver) as c:
         await check_zone(c, zone)
         code = ZONE_CODES[zone]["input"]
-        reply = await c.ask(f"{code}{SOURCE_CODES[source]}", code, zone=zone)
-        note = ""
-        if reply != "N/A" and source == "net":
+        command = f"{code}{SOURCE_CODES[source]}"
+        if c.dry_run:
+            return dry_run(c, zone, f"switch {ZONE_LABELS[zone]} to {source}", [command])
+        reply = await c.ask(command, code, zone=zone)
+        if reply == "N/A":
+            raise ReceiverError(
+                f"{zone_prefix(zone)}The receiver rejected input {source!r}. Is the zone on, and does this model "
+                "have that input?"
+            )
+        warnings = []
+        if source == "net":
             others = [z for z in await zones_on_net(c) if z != zone]
             if others:
                 listing = " and ".join(ZONE_LABELS[z] for z in others)
-                note = (
+                warnings.append(
                     f"It now plays the same network audio as {listing}: a receiver has one network player, so "
                     'changing the service or station changes it in every zone on "net".'
                 )
-    if reply == "N/A":
-        raise ReceiverError(
-            f"{zone_prefix(zone)}The receiver rejected input {source!r}. Is the zone on, and does this model "
-            "have that input?"
-        )
-    return with_note(f"{zone_prefix(zone)}Input is now {CODE_SOURCES.get(reply, f'{code}{reply}')}", note)
+        return result(c, zone, f"{zone_prefix(zone)}Input is now {CODE_SOURCES.get(reply, code + reply)}", warnings)
 
 
 @mcp.tool(title="Set listening mode", annotations=SETTER)
-async def set_listening_mode(mode: ListeningMode, receiver: ReceiverArg = None) -> str:
+async def set_listening_mode(mode: ListeningMode, receiver: ReceiverArg = None) -> ActionResult:
     """Set the main zone's listening mode (surround processing). "direct" and
     "pure-audio" play the source unprocessed; "dolby-surround" and
     "dts-neural-x" upmix to all speakers and play Dolby Atmos / DTS:X content
     natively. The receiver must be on, and may reject modes that don't suit
     the current input signal."""
     async with call(receiver) as c:
-        reply = await c.ask(f"LMD{MODE_CODES[mode]}", "LMD")
-    if reply == "N/A":
-        raise ReceiverError(
-            f"The receiver rejected listening mode {mode!r}: it may be off, or the mode may not suit the "
-            "current input signal (e.g. dts-neural-x on a PCM stereo source)."
-        )
-    return f"Listening mode is now {CODE_MODES.get(reply, f'LMD{reply}')}"
+        command = f"LMD{MODE_CODES[mode]}"
+        if c.dry_run:
+            return dry_run(c, "main", f"set the listening mode to {mode}", [command])
+        reply = await c.ask(command, "LMD")
+        if reply == "N/A":
+            raise ReceiverError(
+                f"The receiver rejected listening mode {mode!r}: it may be off, or the mode may not suit the "
+                "current input signal (e.g. dts-neural-x on a PCM stereo source)."
+            )
+        return result(c, "main", f"Listening mode is now {CODE_MODES.get(reply, f'LMD{reply}')}")
 
 
 @mcp.tool(title="Select network service", annotations=SETTER)
-async def select_net_service(service: NetService, receiver: ReceiverArg = None) -> str:
+async def select_net_service(service: NetService, receiver: ReceiverArg = None) -> ActionResult:
     """Switch the receiver's network audio to a streaming service, e.g.
     Pandora. There is one network player per receiver, shared by every zone
     whose input is "net": set a zone's input to "net" (set_input) to hear it.
@@ -652,19 +728,22 @@ async def select_net_service(service: NetService, receiver: ReceiverArg = None) 
     receiver wait for one. Call get_now_playing afterwards to see what plays."""
     code = NET_SERVICE_CODES[service]
     async with call(receiver) as c:
+        command = f"NSV{code}0"  # "0": no account details included
+        if c.dry_run:
+            return dry_run(c, None, f"switch the network player to {service}", [command])
         # NSV gets no reply of its own. The receiver confirms by pushing the title
         # of its new menu: "NLT" + the service code + 20 status characters + the
         # service's name, e.g. "NLT0401000000480100FF0400Pandora".
         reply = await c.ask(
-            f"NSV{code}0",  # "0": no account details included
+            command,
             f"NLT{code}",
             no_reply=f"The receiver didn't switch to {service}. It may not offer {service}, "
             "or it isn't signed in: check in the Onkyo Controller app.",
         )
-        note = shared_player_note(await zones_on_net(c)) if reply[:1] not in ("3", "4") else ""
-    if reply[:1] in ("3", "4"):  # the screen is a popup or keyboard, not the service's menu
-        raise ReceiverError(not_ready(service, reply[20:]))
-    return with_note(f"Network service is now {reply[20:] or service}", note)
+        if reply[:1] in ("3", "4"):  # the screen is a popup or keyboard, not the service's menu
+            raise ReceiverError(not_ready(service, reply[20:]))
+        note = shared_player_note(await zones_on_net(c))
+        return result(c, None, f"Network service is now {reply[20:] or service}", [note] if note else [])
 
 
 class NetServiceInfo(TypedDict):
@@ -716,8 +795,20 @@ def not_ready(service: str, screen: str) -> str:
     )
 
 
+class NowPlaying(TypedDict):
+    receiver: str
+    service: str | None  # select_net_service name ("pandora"), "usb"/"bluetooth", or None at the top menu
+    station: str | None  # e.g. "Pearl Jam Radio"
+    menu: str | None  # the menu on the receiver's screen; can differ from what plays
+    state: str | None  # playing, paused, stopped, fast-forward, rewind, end
+    title: str | None
+    artist: str | None
+    album: str | None
+    position: str | None  # "00:04:31/00:05:38"
+
+
 @mcp.tool(title="Get now playing", annotations=READ_ONLY)
-async def get_now_playing(receiver: ReceiverArg = None) -> dict[str, Any]:
+async def get_now_playing(receiver: ReceiverArg = None) -> NowPlaying:
     """What the receiver's network player is playing: the service, play state,
     title, artist, album and position, plus the menu its screen is showing
     (which can differ: browsing doesn't stop playback). Every zone whose input
@@ -886,13 +977,22 @@ async def playing_service(c: Call) -> str | None:
     return status[-2:] if len(status) >= 2 else None
 
 
+class StationList(TypedDict):
+    service: str
+    folder: list[str]
+    playable: list[str]  # names play_station accepts (with the same folder)
+    folders: list[str]  # names to add to `folder` to look inside
+    truncated: str | None
+    message: str | None
+
+
 @mcp.tool(title="List stations", annotations=SETTER)
 async def list_stations(
     service: NetService = "pandora",
     folder: FolderPath = (),
     receiver: ReceiverArg = None,
     interrupt: Interrupt = False,
-) -> dict[str, Any]:
+) -> StationList:
     """Browse a network service: list what can be played (stations, tracks)
     and the folders at one level of its menu. Starts at the top (for Pandora:
     your stations); to look inside a folder, call again with its name added to
@@ -902,6 +1002,18 @@ async def list_stations(
     is refused unless interrupt=true (ask the user first)."""
     async with call(receiver) as c:
         code = NET_SERVICE_CODES[service]
+        if c.dry_run:
+            # Browsing means NSV and NLSI, which change the receiver's screen
+            # (and, for another service, stop the music): not in a dry run.
+            would = [f"NSV{code}0", *(f"NLSI<position of {name!r}>" for name in folder), "NLAL..."]
+            return {
+                "service": service,
+                "folder": list(folder),
+                "playable": [],
+                "folders": [],
+                "truncated": None,
+                "message": "DRY RUN, nothing sent: browsing would send " + ", ".join(would),
+            }
         playing = await playing_service(c)
         if playing is not None and playing != code and not interrupt:
             name = CODE_NET_SERVICES.get(playing, f"service {playing}")
@@ -914,27 +1026,29 @@ async def list_stations(
     # message ("No Favorites available") or an account item ("Sign Out")
     playable = list(dict.fromkeys(t for _, kind, t in items if kind in ("M", "0")))
     folders = list(dict.fromkeys(t for _, kind, t in items if kind == "F"))
-    result: dict[str, Any] = {
+    truncated = None
+    if len(playable) > LIST_LIMIT or len(folders) > LIST_LIMIT:
+        truncated = (
+            f"There are {len(playable)} playable items and {len(folders)} folders; only the first {LIST_LIMIT} "
+            "of each are listed. Names further down still work."
+        )
+    message = None
+    if not playable and not folders:
+        message = ", ".join(t for _, _, t in items) or "This menu is empty."
+    return {
         "service": service,
         "folder": list(folder),
         "playable": playable[:LIST_LIMIT],
         "folders": folders[:LIST_LIMIT],
+        "truncated": truncated,
+        "message": message,  # what the receiver shows when there's nothing to list, e.g. "No stations available"
     }
-    if len(playable) > LIST_LIMIT or len(folders) > LIST_LIMIT:
-        result["truncated"] = (
-            f"There are {len(playable)} playable items and "
-            f"{len(folders)} folders; only the first {LIST_LIMIT} "
-            "of each are listed. Names further down still work."
-        )
-    if not playable and not folders:
-        result["message"] = ", ".join(t for _, _, t in items) or "This menu is empty."
-    return result
 
 
 @mcp.tool(title="Play station", annotations=SETTER)
 async def play_station(
     station: str, service: NetService = "pandora", folder: FolderPath = (), receiver: ReceiverArg = None
-) -> str:
+) -> ActionResult:
     """Start playing a station or track from a network service, by name (e.g.
     "Pearl Jam Radio" on Pandora). Names come from list_stations; a
     distinctive part of a name is enough ("pearl jam"). For items inside
@@ -942,6 +1056,14 @@ async def play_station(
     list_stations used. It plays in every zone whose input is "net": set a
     zone's input to "net" first to hear it."""
     async with call(receiver) as c:
+        if c.dry_run:
+            code = NET_SERVICE_CODES[service]
+            would = [
+                f"NSV{code}0",
+                *(f"NLSI<position of {name!r}>" for name in folder),
+                f"NLSI<position of {station!r}>",
+            ]
+            return dry_run(c, None, f"open {service} and play the item matching {station!r}", would)
         _, items = await open_menu(c, service, folder)
         playable = [i for i in items if i[1] in ("M", "0")]  # never "Sign Out" and the like
         if not playable:
@@ -957,7 +1079,7 @@ async def play_station(
             no_reply=f"{title} was selected but didn't start playing.",
         )
         note = shared_player_note(await zones_on_net(c))
-    return with_note(f"Playing {title} on {service}", note)
+        return result(c, None, f"Playing {title} on {service}", [note] if note else [])
 
 
 PlaybackAction = Literal["play", "pause", "stop", "next", "previous"]
@@ -972,20 +1094,22 @@ PLAYBACK_CODES: dict[str, tuple[str, str | None]] = {
 
 
 @mcp.tool(title="Control playback", annotations=PLAYBACK)
-async def control_playback(action: PlaybackAction, receiver: ReceiverArg = None) -> str:
+async def control_playback(action: PlaybackAction, receiver: ReceiverArg = None) -> ActionResult:
     """Play, pause, stop, or skip to the next/previous track on the network
     player (shared by every zone on "net"). "play" resumes what was paused;
     to start a station, use play_station. Services limit skipping: Pandora
     allows a few skips per hour and can't go back."""
     code, state = PLAYBACK_CODES[action]
     async with call(receiver) as c:
+        if c.dry_run:
+            return dry_run(c, None, f"{action} on the network player", [f"NTC{code}"])
         if state:
             await c.ask(
                 f"NTC{code}",
                 f"NST{state}",
                 no_reply=f"The player didn't {action}. Is something selected? Start a station with play_station.",
             )
-            return {"play": "Playing", "pause": "Paused", "stop": "Stopped"}[action]
+            return result(c, None, {"play": "Playing", "pause": "Paused", "stop": "Stopped"}[action])
         # A skip has no state to wait for: watch for the title to change
         before = await c.ask("NTIQSTN", "NTI")
         await c.tell(f"NTC{code}")
@@ -993,7 +1117,7 @@ async def control_playback(action: PlaybackAction, receiver: ReceiverArg = None)
             await asyncio.sleep(0.5)
             title = await c.ask("NTIQSTN", "NTI")
             if title != before:
-                return f"Now playing {title.strip()}"
+                return result(c, None, f"Now playing {title.strip()}")
     raise ReceiverError(
         "The track didn't change. The service may not allow that "
         "right now (Pandora limits skips per hour and can't go back)."

@@ -23,6 +23,11 @@ pytestmark = pytest.mark.anyio
 
 
 def text(result) -> str:
+    """What the model reads: an error's message, or a setter's detail plus its
+    warnings (ActionResult), or the plain text of other results."""
+    sc = result.structured_content
+    if not result.is_error and isinstance(sc, dict) and "detail" in sc:
+        return ". ".join([sc["detail"], *sc["warnings"]])
     return result.content[0].text
 
 
@@ -70,7 +75,7 @@ async def test_one_unreachable_receiver_doesnt_hide_the_others(two, fake2):
 @pytest.mark.parametrize(
     "tool, args, code, value",
     [
-        ("set_power", {"on": False}, "PWR", "00"),
+        ("set_power", {"state": "off"}, "PWR", "00"),
         ("set_volume", {"level": 20}, "MVL", "28"),
         ("set_mute", {"muted": True}, "AMT", "01"),
         ("set_input", {"source": "tv"}, "SLI", "12"),
@@ -85,7 +90,7 @@ async def test_set_tools_change_only_the_named_receiver(two, fake, fake2, tool, 
     assert fake.state[code] == before  # the other receiver is untouched
 
 
-@pytest.mark.parametrize("tool, args", [("set_power", {"on": False}), ("set_volume", {"level": 20})])
+@pytest.mark.parametrize("tool, args", [("set_power", {"state": "off"}), ("set_volume", {"level": 20})])
 async def test_writes_without_receiver_are_refused_not_guessed(two, fake, fake2, tool, args):
     result = await two.call_tool(tool, args)
     assert result.is_error

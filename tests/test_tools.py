@@ -19,6 +19,11 @@ pytestmark = pytest.mark.anyio
 
 
 def text(result) -> str:
+    """What the model reads: an error's message, or a setter's detail plus its
+    warnings (ActionResult), or the plain text of other results."""
+    sc = result.structured_content
+    if not result.is_error and isinstance(sc, dict) and "detail" in sc:
+        return ". ".join([sc["detail"], *sc["warnings"]])
     return result.content[0].text
 
 
@@ -132,9 +137,9 @@ async def test_get_status_unknown_input_shown_raw(client, receiver):
 
 
 async def test_set_power(client, receiver):
-    assert text(await client.call_tool("set_power", {"on": False})) == "Power is now standby"
+    assert text(await client.call_tool("set_power", {"state": "off"})) == "Power is now standby"
     assert receiver["PWR"] == "00"
-    assert text(await client.call_tool("set_power", {"on": True})).startswith("Power is now on.")
+    assert text(await client.call_tool("set_power", {"state": "on"})).startswith("Power is now on.")
     assert receiver["PWR"] == "01"
 
 
@@ -150,7 +155,7 @@ async def test_set_volume(client, receiver):
 
 async def test_set_volume_capped(client, receiver):
     result = await client.call_tool("set_volume", {"level": 90})
-    assert text(result) == "Volume is now 75.0 (requested 90, capped at 75)"
+    assert text(result) == "Volume is now 75.0. Requested 90, capped at 75 (the owner's limit for this zone)."
     assert receiver["MVL"] == "96"  # raw 0x96 = 75.0, never above the cap
 
 
@@ -264,12 +269,12 @@ async def test_zone2_status(client, receiver):
 
 async def test_zone2_on_net_at_capped_volume(client, receiver):
     # The request that started this: "turn on Zone 2 with network audio"
-    assert text(await client.call_tool("set_power", {"on": True, "zone": "zone2"})).startswith(
+    assert text(await client.call_tool("set_power", {"state": "on", "zone": "zone2"})).startswith(
         "Zone 2: Power is now on."
     )
     assert text(await client.call_tool("set_input", {"source": "net", "zone": "zone2"})) == "Zone 2: Input is now net"
     result = await client.call_tool("set_volume", {"level": 90, "zone": "zone2"})
-    assert text(result) == "Zone 2: Volume is now 75.0 (requested 90, capped at 75)"
+    assert text(result) == "Zone 2: Volume is now 75.0. Requested 90, capped at 75 (the owner's limit for this zone)."
     assert text(await client.call_tool("set_mute", {"muted": True, "zone": "zone2"})) == "Zone 2: Muted"
     assert (receiver["ZPW"], receiver["SLZ"], receiver["ZVL"], receiver["ZMT"]) == ("01", "2B", "96", "01")
     # The main zone is untouched
@@ -528,7 +533,7 @@ async def test_volume_cap_off_the_step_grid_is_never_exceeded(fake, configure):
     configure(settings_for(fake, max_volume={"main": 60.3, "zone2": 60.3, "zone3": 60.3}))
     async with Client(server.mcp) as c:
         result = await c.call_tool("set_volume", {"level": 100})
-    assert text(result) == "Volume is now 60.0 (requested 100, capped at 60.3)"
+    assert text(result) == "Volume is now 60.0. Requested 100, capped at 60.3 (the owner's limit for this zone)."
     assert fake.state["MVL"] == "78"  # 120 raw = 60.0, the highest step at or below 60.3
 
 
@@ -552,7 +557,7 @@ async def test_per_zone_cap(fake, configure):
     async with Client(server.mcp) as c:
         zone2 = await c.call_tool("set_volume", {"level": 60, "zone": "zone2"})
         main = await c.call_tool("set_volume", {"level": 60})
-    assert text(zone2) == "Zone 2: Volume is now 45.0 (requested 60, capped at 45)"
+    assert text(zone2) == "Zone 2: Volume is now 45.0. Requested 60, capped at 45 (the owner's limit for this zone)."
     assert text(main) == "Volume is now 60.0"
 
 
@@ -631,3 +636,53 @@ async def test_list_net_services_shows_ones_this_server_cant_select(client, rece
     )
     services = (await client.call_tool("list_net_services", {})).structured_content["services"]
     assert {"code": "13", "receiver_name": "iHeartRadio", "name": None, "selectable": False} in services
+
+
+async def test_setters_return_a_structured_result(client, receiver):
+    result = await client.call_tool("set_volume", {"level": 30, "zone": "main"})
+    assert result.structured_content == {
+        "receiver": "127.0.0.1",
+        "zone": "main",
+        "outcome": "done",
+        "detail": "Volume is now 30.0",
+        "sent": ["MVL3C"],  # exactly what went to the receiver
+        "warnings": [],
+    }
+    schema = {t.name: t for t in (await client.list_tools()).tools}["set_volume"].output_schema
+    assert set(schema["required"]) == {"receiver", "zone", "outcome", "detail", "sent", "warnings"}
+
+
+@pytest.mark.parametrize(
+    "tool, args, sent",
+    [
+        ("set_power", {"state": "off"}, ["PWR00"]),
+        ("set_volume", {"level": 90}, ["MVL96"]),  # still capped in a dry run: 75.0
+        ("set_mute", {"muted": True}, ["AMT01"]),
+        ("set_input", {"source": "net"}, ["SLI2B"]),
+        ("set_listening_mode", {"mode": "direct"}, ["LMD01"]),
+        ("select_net_service", {"service": "pandora"}, ["NSV040"]),
+        ("play_station", {"station": "pearl jam"}, ["NSV040", "NLSI<position of 'pearl jam'>"]),
+        ("control_playback", {"action": "next"}, ["NTCTRUP"]),
+    ],
+)
+async def test_dry_run_sends_nothing_and_says_what_it_would_send(fake, configure, tool, args, sent):
+    configure(settings_for(fake, dry_run=True))
+    before = dict(fake.state)
+    async with Client(server.mcp) as c:
+        result = await c.call_tool(tool, args)
+        status = (await c.call_tool("get_status", {})).structured_content
+    assert not result.is_error, text(result)
+    assert result.structured_content["outcome"] == "dry_run"
+    assert result.structured_content["detail"].startswith("DRY RUN, nothing sent: would ")
+    assert result.structured_content["sent"] == sent
+    assert all(cmd.endswith("QSTN") for cmd in fake.received), fake.received  # only queries reached the receiver
+    assert fake.state == before
+    assert status["dry_run"] is True
+
+
+async def test_dry_run_still_checks_the_call(fake, configure):
+    # Reads still happen, so a dry run catches what a real call would refuse
+    configure(settings_for(fake, dry_run=True))
+    async with Client(server.mcp) as c:
+        result = await c.call_tool("set_volume", {"level": 20, "zone": "zone3"})
+    assert result.is_error and "has no Zone 3" in text(result)

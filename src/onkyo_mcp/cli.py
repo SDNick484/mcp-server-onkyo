@@ -34,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd")
 
     serve = sub.add_parser("serve", parents=[common], help="run the MCP server (stdio by default, or --http)")
+    serve.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read the receivers, but send nothing that changes anything (ONKYO_DRY_RUN=1)",
+    )
     remote.add_http_arguments(serve, default_port=8711, default_path="/onkyo/mcp")
 
     disc = sub.add_parser("discover", parents=[common], help="list receivers that answer a discovery broadcast")
@@ -55,6 +60,8 @@ def normalize(argv: list[str]) -> list[str]:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(normalize(sys.argv[1:] if argv is None else argv))
+    if getattr(args, "dry_run", False):
+        os.environ["ONKYO_DRY_RUN"] = "1"  # the server's lifespan reads settings from the environment
     settings = load_settings()
 
     from .server import enable_debug, mcp  # the tools register on import
