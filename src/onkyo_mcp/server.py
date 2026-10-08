@@ -58,6 +58,7 @@ from .codes import (
     volume_to_raw,
 )
 from .config import Settings, load_settings
+from .logsafe import RedactingFormatter
 from .receivers import Receiver, ReceiverError, Registry, Session, Unreachable
 
 # Everything goes through this logger (and its children), which writes to
@@ -66,10 +67,11 @@ from .receivers import Receiver, ReceiverError, Registry, Session, Unreachable
 log = logging.getLogger("onkyo_mcp")
 
 
-def enable_debug() -> None:
-    """Log every MCP message and eISCP packet to stderr, at DEBUG level."""
+def enable_debug(redacted: bool = True) -> None:
+    """Log every MCP message and eISCP packet to stderr, at DEBUG level.
+    LAN addresses are redacted unless redacted=False; secrets always are."""
     handler = logging.StreamHandler()  # defaults to sys.stderr
-    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+    handler.setFormatter(RedactingFormatter("%(asctime)s %(message)s", "%H:%M:%S", addresses=redacted))
     log.addHandler(handler)
     log.setLevel(logging.DEBUG)
     log.propagate = False  # the SDK configures the root logger too; don't log twice
@@ -226,7 +228,7 @@ class Call:
             if expect != power_code and not command.endswith("QSTN"):
                 # A setter got no reply. A zone in standby still answers queries,
                 # but some receivers (TX-NR7100) silently ignore setters, so ask
-                # the zone's power state.
+                # the zone's power state. ASSUMPTION O-STANDBY-SILENT
                 try:
                     power: str | None = await self.session.request(f"{power_code}QSTN", power_code)
                 except _READ_ERRORS:
@@ -428,7 +430,7 @@ async def receiver_status(c: Call, only: Zone | None) -> ReceiverStatus:
 
 
 # --- the shared network player -----------------------------------------------------------
-# A receiver has ONE network player. Every zone whose input is "net" plays
+# A receiver has ONE network player (ASSUMPTION O-NET-SHARED). Every zone whose input is "net" plays
 # it, so a service or station chosen "for Zone 2" also changes what the main
 # zone hears if the main zone is on "net" too. The eISCP commands (NSV, NLS,
 # NTC) don't name a zone, so there is no way to give zones different network
@@ -748,8 +750,8 @@ async def get_now_playing(receiver: ReceiverArg = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Stations and playback. A service's top menu (for Pandora: your stations)
-# comes from two commands:
+# Stations and playback (ASSUMPTION O-MENU-LISTS). A service's top menu (for
+# Pandora: your stations) comes from two commands:
 #   NSV0401 -> pushes "NLT0401000000480100FF0400Pandora": service 04, list UI
 #              (0), service top layer (1), 0x48 = 72 items, layer number 01
 #   NLAL0001 01 0000 0048 -> "NLAX0001S000<?xml ...><item icontype="M"

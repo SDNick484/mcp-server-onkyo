@@ -14,6 +14,8 @@ Data is "!1" + a 3-letter command + its parameter + a terminator:
 Receivers also *push* status messages nobody asked for (another zone's
 volume, the network player's progress), so a reply is found by its 3-letter
 prefix, skipping everything else. See Connection.request.
+
+ASSUMPTION O-FRAMING (the layout above), O-PUSHES (the pushes).
 """
 
 from __future__ import annotations
@@ -74,7 +76,7 @@ class Connection:
     """One TCP connection to a receiver, used for one or more commands.
 
     Each tool call opens one, sends its commands one after another (waiting
-    for each reply), and closes it. Not kept open between calls: simpler, and
+    for each reply), and closes it (ASSUMPTION O-MULTI-COMMAND). Not kept open between calls: simpler, and
     it survives the receiver dropping idle connections.
     """
 
@@ -200,6 +202,7 @@ def parse_ecn(msg: str, host: str) -> Found | None:
 
 async def discover(address: str, port: int = DEFAULT_PORT, timeout: float = 3.0) -> list[Found]:
     """Send "!xECNQSTN" to `address` (normally the broadcast address) on UDP
+    (ASSUMPTION O-DISCOVERY)
     `port`. Each receiver replies with "!1ECN<model>/<port>/<region>/<mac>",
     and the reply's source address is its IP. Collects replies for `timeout`."""
     found: dict[str, Found] = {}  # by IP, so a receiver that answers twice is listed once

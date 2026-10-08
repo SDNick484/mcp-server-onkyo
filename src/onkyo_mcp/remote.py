@@ -316,4 +316,9 @@ def serve_http(mcp: MCPServer, cfg: HttpConfig) -> None:
         log.warning("Serving %s on %s:%s WITHOUT Cloudflare Access checks.", cfg.path, cfg.bind, cfg.port)
     else:
         log.info("Serving %s on %s:%s; requests need a %s assertion.", cfg.path, cfg.bind, cfg.port, cfg.access.issuer)
-    uvicorn.run(app, host=cfg.bind, port=cfg.port, log_level="info", proxy_headers=False, lifespan="on")
+    # log_config=None: uvicorn's own log lines (access logs carry client
+    # addresses) go through the root logger, so the server's redacting
+    # handler (logsafe.py) formats them, instead of uvicorn's plain one.
+    uvicorn.run(
+        app, host=cfg.bind, port=cfg.port, log_level="info", log_config=None, proxy_headers=False, lifespan="on"
+    )

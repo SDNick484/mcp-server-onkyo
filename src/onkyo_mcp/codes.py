@@ -14,6 +14,7 @@ import math
 from typing import Literal
 
 # Input selector (SLI) codes, named after the TX-NR7100/6050 front-panel labels.
+# ASSUMPTION O-SOURCE-CODES
 # The Literal type becomes a JSON Schema "enum", so the model can only pick
 # one of these names. Keep the two in sync.
 Source = Literal[
@@ -54,6 +55,7 @@ CODE_SOURCES = {code: name for name, code in SOURCE_CODES.items()}
 # Listening mode (LMD) codes. Several codes have older and newer meanings in
 # onkyo-eiscp's table (80 = PLII Movie / Dolby Surround, 82 = Neo:6 Cinema /
 # DTS Neural:X, 03 = Film / Game-RPG); these names are the 2021-model ones.
+# ASSUMPTION O-LMD-CODES
 ListeningMode = Literal[
     "stereo",
     "direct",
@@ -90,6 +92,7 @@ CODE_MODES = {code: name for name, code in MODE_CODES.items()}
 # list them in their own description (NRIQSTN, <netservicelist>);
 # onkyo-eiscp's tables have TIDAL as 19, AirPlay as 18 and no Amazon Music.
 # All verified on a TX-NR6050. Most must be signed in on the receiver first.
+# ASSUMPTION O-NSV-CODES
 NetService = Literal["pandora", "spotify", "deezer", "tidal", "amazon-music", "airplay", "tunein", "music-server"]
 NET_SERVICE_CODES: dict[str, str] = {
     "pandora": "04",
@@ -105,12 +108,13 @@ CODE_NET_SERVICES = {code: name for name, code in NET_SERVICE_CODES.items()}
 # Other sources the network player can be playing (NMS service icons; AirPlay
 # shows as 18 there even though it is selected as 44)
 CODE_NET_SERVICES |= {"18": "airplay", "F0": "usb", "F1": "usb", "F4": "bluetooth"}
-# NST play state: first character of the reply ("Pxx1" = playing)
+# NST play state: first character of the reply ("Pxx1" = playing). ASSUMPTION O-PLAY-STATE
 PLAY_STATES = {"P": "playing", "p": "paused", "S": "stopped", "F": "fast-forward", "R": "rewind", "E": "end"}
 
 # Zones 2 and 3 drive speakers in other rooms. Each zone has its own power,
 # volume, mute and input, with its own 3-letter command for each. Volumes and
 # input codes use the same scale and table as the main zone.
+# ASSUMPTION O-ZONE2-CODES, O-ZONE3-CODES
 Zone = Literal["main", "zone2", "zone3"]
 ZONE_CODES: dict[str, dict[str, str]] = {
     "main": {"power": "PWR", "volume": "MVL", "mute": "AMT", "input": "SLI"},
@@ -121,7 +125,8 @@ ZONE_LABELS = {"main": "Main zone", "zone2": "Zone 2", "zone3": "Zone 3"}
 
 
 # --- volume -------------------------------------------------------------------
-# Volumes are hex raw steps. With 2 steps per display unit (2021+ models),
+# Volumes are hex raw steps. With 2 steps per display unit (2021+ models,
+# ASSUMPTION O-VOLUME-STEPS),
 # raw 0x00-0xC8 is 0.0-100.0 on the front panel: "50" -> 80 raw -> 40.0.
 def raw_to_volume(raw: str, steps: int) -> float:
     return int(raw, 16) / steps

@@ -11,10 +11,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 
 from . import __version__, eiscp, remote
 from .config import load_settings
+from .logsafe import setup_logging
 
 COMMANDS = ("serve", "discover")
 
@@ -24,6 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--debug", action="store_true", help="log MCP and eISCP traffic to stderr")
+    common.add_argument(
+        "--no-redact",
+        action="store_true",
+        help="show LAN addresses and MACs in logs (ONKYO_LOG_UNREDACTED=1); secrets stay hidden",
+    )
     sub = parser.add_subparsers(dest="cmd")
 
     serve = sub.add_parser("serve", parents=[common], help="run the MCP server (stdio by default, or --http)")
@@ -52,8 +59,11 @@ def main(argv: list[str] | None = None) -> None:
 
     from .server import enable_debug, mcp  # the tools register on import
 
+    redacted = not (args.no_redact or os.environ.get("ONKYO_LOG_UNREDACTED", "") in ("1", "true", "yes", "on"))
+    # stderr only: on the stdio transport, stdout carries JSON-RPC
+    setup_logging(logging.INFO if getattr(args, "http", False) else logging.WARNING, redacted=redacted)
     if settings.debug or args.debug:
-        enable_debug()
+        enable_debug(redacted)
 
     if args.cmd == "discover":  # quick CLI check, no MCP involved
         receivers = asyncio.run(eiscp.discover(settings.discovery_addr, settings.discovery_port, args.timeout))
@@ -67,7 +77,6 @@ def main(argv: list[str] | None = None) -> None:
     if args.http:
         # A long-lived HTTP service, e.g. in an LXC behind Cloudflare Access
         # (see remote.py). Its logs go to stderr like everything else.
-        logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
         try:
             remote.serve_http(mcp, remote.http_config(args))
         except remote.ConfigError as exc:
