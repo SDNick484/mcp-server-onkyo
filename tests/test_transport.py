@@ -3,9 +3,9 @@ import asyncio
 
 import pytest
 
-import fake_receiver
-import onkyo_mcp
-from onkyo_mcp import discover, send
+from onkyo_mcp.sim import fake_receiver
+from onkyo_mcp import server as onkyo_mcp
+from onkyo_mcp.server import discover, send
 
 pytestmark = pytest.mark.anyio
 

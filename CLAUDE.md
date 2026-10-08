@@ -6,9 +6,12 @@ so explain the *why* of MCP concepts as you go and prefer small, readable
 changes over clever ones. Show the JSON-RPC traffic when it helps.
 
 ## Layout
-- `onkyo_mcp.py` — the server. Two layers: eISCP transport (plain protocol code)
+- `src/onkyo_mcp/server.py` — the server. Two layers: eISCP transport (plain protocol code)
   and MCP tools (`@mcp.tool()` functions). Keep MCP concerns out of the transport layer.
-- `fake_receiver.py` — simulated receiver on 127.0.0.1:60128 for hardware-free dev.
+- `src/onkyo_mcp/remote.py` — Streamable HTTP behind Cloudflare Access. Shared, byte-identical,
+  with mcp-server-shieldtv, -harmony and -sofabaton: change it in all four.
+- `src/onkyo_mcp/sim/fake_receiver.py` — simulated receiver on 127.0.0.1:60128 for
+  hardware-free dev (`python -m onkyo_mcp.sim.fake_receiver`).
 
 ## Conventions
 - Python 3.11+, official `mcp` SDK v2 (MCPServer, formerly FastMCP), asyncio only (no threads).

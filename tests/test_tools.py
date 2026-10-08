@@ -9,8 +9,8 @@ import logging
 import pytest
 from mcp import Client
 
-import fake_receiver
-import onkyo_mcp
+from onkyo_mcp.sim import fake_receiver
+from onkyo_mcp import server as onkyo_mcp
 
 pytestmark = pytest.mark.anyio
 

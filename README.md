@@ -165,13 +165,13 @@ Add this to `claude_desktop_config.json`:
 
 ## Development
 
-No receiver needed: `fake_receiver.py` simulates one on `127.0.0.1:60128`. It
+No receiver needed: `onkyo_mcp.sim.fake_receiver` simulates one on `127.0.0.1:60128`. It
 answers discovery, remembers power/volume/mute state, and sends unsolicited
 status messages the way real receivers do. Like a TX-NR7100, it ignores
 everything but power and queries while in standby.
 
 ```sh
-python fake_receiver.py &
+python -m onkyo_mcp.sim.fake_receiver &
 ONKYO_DISCOVERY_ADDR=127.0.0.1 mcp-server-onkyo --discover
 ONKYO_HOST=127.0.0.1 npx @modelcontextprotocol/inspector mcp-server-onkyo
 ```
@@ -212,7 +212,7 @@ stderr in its UI.
 
 ### How it works
 
-`onkyo_mcp.py` has two layers:
+`src/onkyo_mcp/server.py` has two layers:
 
 1. **eISCP transport.** Each message is a 16-byte header (`ISCP`, header size,
    data size, version) followed by a command such as `!1MVL3C\r`, which sets

@@ -22,7 +22,7 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import MCPServer
 
-import onkyo_remote as remote  # the only line that differs between repos
+from onkyo_mcp import remote  # the only line that differs between repos
 
 TEAM = "example.cloudflareaccess.com"
 AUD = "aud-tag-123"

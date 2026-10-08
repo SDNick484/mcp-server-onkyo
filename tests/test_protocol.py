@@ -4,8 +4,8 @@ from typing import get_args
 
 import pytest
 
-import onkyo_mcp
-from onkyo_mcp import (CODE_MODES, CODE_SOURCES, MODE_CODES, SOURCE_CODES, ListeningMode, Source,
+from onkyo_mcp import server as onkyo_mcp
+from onkyo_mcp.server import (CODE_MODES, CODE_SOURCES, MODE_CODES, SOURCE_CODES, ListeningMode, Source,
                        build_packet, decode_datagram, raw_to_volume, volume_to_raw)
 
 
@@ -82,6 +82,6 @@ def test_empty_settings_use_defaults():
         "ONKYO_HOST", "ONKYO_PORT", "ONKYO_MAX_VOLUME", "ONKYO_VOLUME_STEPS",
         "ONKYO_TIMEOUT", "ONKYO_DEBUG", "ONKYO_DISCOVERY_ADDR")}}
     out = subprocess.run([sys.executable, "-c",
-                          "import onkyo_mcp as o; print(repr(o.HOST), o.PORT, o.MAX_VOLUME, o.TIMEOUT)"],
+                          "import onkyo_mcp.server as o; print(repr(o.HOST), o.PORT, o.MAX_VOLUME, o.TIMEOUT)"],
                          env=env, capture_output=True, text=True, check=True)
     assert out.stdout.split() == ["''", "60128", "75.0", "5.0"]  # no host: use discovery

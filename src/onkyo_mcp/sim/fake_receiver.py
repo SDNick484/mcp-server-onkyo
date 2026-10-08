@@ -1,8 +1,8 @@
 """
 Simulated Onkyo receiver for developing without hardware.
 
-    python fake_receiver.py            # listens on 127.0.0.1:60128
-    ONKYO_HOST=127.0.0.1 python onkyo_mcp.py
+    python -m onkyo_mcp.sim.fake_receiver   # listens on 127.0.0.1:60128
+    ONKYO_HOST=127.0.0.1 mcp-server-onkyo
 
 It speaks enough eISCP to exercise the server: it remembers PWR/MVL/AMT/SLI/LMD
 state for the main zone and ZPW/ZVL/ZMT/SLZ for zone 2 (it has no zone 3, like

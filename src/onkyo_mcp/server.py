@@ -2,16 +2,16 @@
 Minimal MCP server for Onkyo receivers (eISCP over TCP).
 
 Run (stdio transport, which is what Claude Code uses for local servers):
-    ONKYO_HOST=192.168.1.50 mcp-server-onkyo        # or: python onkyo_mcp.py
+    ONKYO_HOST=192.168.1.50 mcp-server-onkyo        # or: python -m onkyo_mcp
 
 Register with Claude Code:
     claude mcp add onkyo -e ONKYO_HOST=192.168.1.50 -- mcp-server-onkyo
 
 Find receivers on your network (prints IP, model, MAC):
-    python onkyo_mcp.py --discover
+    mcp-server-onkyo --discover
 
 Inspect interactively (shows tools/list, lets you call tools by hand):
-    npx @modelcontextprotocol/inspector python onkyo_mcp.py
+    npx @modelcontextprotocol/inspector mcp-server-onkyo
 
 Serve over HTTP instead (an always-on box behind Cloudflare Access; see README):
     mcp-server-onkyo --http --port 8711
@@ -913,7 +913,7 @@ def main(argv: list[str] | None = None) -> None:
     import argparse
     import sys
 
-    import onkyo_remote
+    from . import remote as onkyo_remote
 
     parser = argparse.ArgumentParser(prog="mcp-server-onkyo", description="MCP server for Onkyo receivers")
     parser.add_argument("--debug", action="store_true", help="log MCP and eISCP traffic to stderr")
@@ -932,7 +932,7 @@ def main(argv: list[str] | None = None) -> None:
             print("No receivers answered. See README: Troubleshooting.", file=sys.stderr)
     elif args.http:
         # A long-lived HTTP service, e.g. in an LXC behind Cloudflare Access
-        # (see onkyo_remote.py). Its logs go to stderr like everything else.
+        # (see remote.py). Its logs go to stderr like everything else.
         logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
         try:
             onkyo_remote.serve_http(mcp, onkyo_remote.http_config(args))
