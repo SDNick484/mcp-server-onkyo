@@ -9,7 +9,6 @@ key (so nothing here needs Cloudflare), and a fake receiver behind it all.
 from __future__ import annotations
 
 import asyncio
-import json
 import socket
 import time
 from collections.abc import AsyncIterator
@@ -72,8 +71,9 @@ def client(url: str, assertion: str | None) -> Client:
 
 async def test_tools_work_over_http_with_a_valid_assertion(fake, configure):
     async with serving(fake, configure) as url, client(url, token()) as c:
-        status = json.loads((await c.call_tool("get_status", {})).content[0].text)
-        assert (status["power"], status["volume"]) == ("on", 40.0)
+        status = (await c.call_tool("get_status", {})).structured_content
+        main = status["receivers"][0]["zones"][0]
+        assert (main["power"], main["volume"]) == ("on", 40.0)
         assert (await c.call_tool("set_volume", {"level": 30})).content[0].text == "Volume is now 30.0"
     assert fake.state["MVL"] == "3C"
 

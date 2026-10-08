@@ -8,7 +8,6 @@ one LAN.
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
 from mcp import Client
@@ -34,16 +33,38 @@ async def two(fake: FakeReceiver, fake2: FakeReceiver, configure):
         yield c
 
 
+def only(result) -> dict:
+    (r,) = result.structured_content["receivers"]
+    return r
+
+
 async def test_pick_by_name_ignoring_case_and_spaces(two, fake, fake2):
-    family = json.loads(text(await two.call_tool("get_status", {"receiver": "family room"})))
-    theater = json.loads(text(await two.call_tool("get_status", {"receiver": "THEATER"})))
-    assert (family["receiver"], family["input"]) == ("Family Room", "bd-dvd")
-    assert (theater["receiver"], theater["input"]) == ("Theater", "game")
+    family = only(await two.call_tool("get_status", {"receiver": "family room"}))
+    theater = only(await two.call_tool("get_status", {"receiver": "THEATER"}))
+    assert (family["receiver"], family["zones"][0]["input"]) == ("Family Room", "bd-dvd")
+    assert (theater["receiver"], theater["zones"][0]["input"]) == ("Theater", "game")
 
 
 async def test_pick_by_address(two, fake2):
-    result = json.loads(text(await two.call_tool("get_status", {"receiver": f"127.0.0.1:{fake2.port}"})))
-    assert result["receiver"] == "Theater"
+    assert only(await two.call_tool("get_status", {"receiver": f"127.0.0.1:{fake2.port}"}))["receiver"] == "Theater"
+
+
+async def test_status_without_receiver_covers_them_all(two, fake2):
+    # Reads can't do harm, so instead of asking which, get_status covers every receiver
+    result = (await two.call_tool("get_status", {})).structured_content
+    assert [r["receiver"] for r in result["receivers"]] == ["Family Room", "Theater"]
+    theater = result["receivers"][1]
+    # The TX-NR7100 profile: Zone 2 drives height speakers, so no volume control there
+    assert {z["zone"]: z["volume_control"] for z in theater["zones"]} == {"main": True, "zone2": False}
+
+
+async def test_one_unreachable_receiver_doesnt_hide_the_others(two, fake2):
+    await fake2.stop()
+    result = (await two.call_tool("get_status", {})).structured_content
+    assert [(r["receiver"], r["reachable"]) for r in result["receivers"]] == [
+        ("Family Room", True),
+        ("Theater", False),
+    ]
 
 
 @pytest.mark.parametrize(

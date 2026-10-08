@@ -43,6 +43,11 @@ class ReceiverError(ToolError):
     """
 
 
+class Unreachable(ReceiverError):
+    """Couldn't connect, or connected but got no reply: a state of the
+    receiver (off the network, rebooting), not a mistake in the call."""
+
+
 @dataclass(frozen=True)
 class ZoneInfo:
     present: bool

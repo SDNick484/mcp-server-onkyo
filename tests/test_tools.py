@@ -59,19 +59,62 @@ async def test_tool_annotations(client):
     assert volume.idempotent_hint is True
 
 
-async def test_get_status(client):
+def zones(result) -> dict:
+    """get_status's zones for the (only) receiver, by name."""
+    (r,) = result.structured_content["receivers"]
+    return {z["zone"]: z for z in r["zones"]}
+
+
+async def test_get_status(client, fake):
     result = await client.call_tool("get_status", {})
-    assert json.loads(text(result)) == {
-        "receiver": "127.0.0.1",
-        "zone": "main",
-        "power": "on",
-        "volume": 40.0,
-        "muted": False,
-        "input": "bd-dvd",
-        "listening_mode": "stereo",
-        # the fake has Zone 2 (in standby), no Zone 3
-        "other_zones": {"zone2": "standby"},
+    assert not result.is_error
+    assert result.structured_content == {
+        "dry_run": False,
+        "receivers": [
+            {
+                "receiver": "127.0.0.1",
+                "host": "127.0.0.1",
+                "model": "TX-NR6050",  # from its self-description
+                "reachable": True,
+                "error": None,
+                # Every zone it has, each in full: the fake has Zone 2 (in standby), no Zone 3
+                "zones": [
+                    {
+                        "zone": "main",
+                        "power": "on",
+                        "volume": 40.0,
+                        "volume_cap": 75.0,
+                        "volume_control": True,
+                        "muted": False,
+                        "input": "bd-dvd",
+                        "listening_mode": "stereo",
+                    },
+                    {
+                        "zone": "zone2",
+                        "power": "standby",
+                        "volume": 40.0,
+                        "volume_cap": 75.0,
+                        "volume_control": True,
+                        "muted": False,
+                        "input": "same-as-main",
+                        "listening_mode": None,
+                    },
+                ],
+                "net_zones": [],
+            }
+        ],
     }
+
+
+async def test_get_status_publishes_an_output_schema(client):
+    schema = {t.name: t for t in (await client.list_tools()).tools}["get_status"].output_schema
+    assert schema is not None and set(schema["required"]) == {"dry_run", "receivers"}
+
+
+async def test_net_zones_lists_zones_sharing_the_network_player(client, receiver):
+    receiver.update(SLI="2B", ZPW="01", SLZ="2B")  # both zones on "net"
+    result = await client.call_tool("get_status", {})
+    assert result.structured_content["receivers"][0]["net_zones"] == ["main", "zone2"]
 
 
 async def test_every_receiver_tool_takes_receiver_argument(client):
@@ -84,7 +127,7 @@ async def test_every_receiver_tool_takes_receiver_argument(client):
 async def test_get_status_unknown_input_shown_raw(client, receiver):
     receiver["SLI"] = "2C"  # an input not in SOURCE_CODES
     result = await client.call_tool("get_status", {})
-    assert json.loads(text(result))["input"] == "SLI2C"
+    assert zones(result)["main"]["input"] == "SLI2C"
 
 
 async def test_set_power(client, receiver):
@@ -188,7 +231,7 @@ async def test_setter_in_standby_says_so(client, receiver):
 async def test_status_works_in_standby(client, receiver):
     receiver["PWR"] = "00"  # queries are still answered in standby
     result = await client.call_tool("get_status", {})
-    assert json.loads(text(result))["power"] == "standby"
+    assert zones(result)["main"]["power"] == "standby"
 
 
 async def test_unreachable_receiver_says_so(fake, configure):
@@ -202,23 +245,20 @@ async def test_unreachable_receiver_says_so(fake, configure):
 
 async def test_zone_arguments_in_schema(client):
     tools = {t.name: t for t in (await client.list_tools()).tools}
-    for name in ("get_status", "set_power", "set_volume", "set_mute", "set_input"):
+    for name in ("set_power", "set_volume", "set_mute", "set_input"):
         zone = tools[name].input_schema["properties"]["zone"]
         assert set(zone["enum"]) == {"main", "zone2", "zone3"}, name
         assert zone["default"] == "main", name
+    # get_status's zone is a filter: omitted means every zone
+    status_zone = tools["get_status"].input_schema["properties"]["zone"]
+    assert status_zone["default"] is None
     assert "zone" not in tools["set_listening_mode"].input_schema["properties"]
 
 
 async def test_zone2_status(client, receiver):
     result = await client.call_tool("get_status", {"zone": "zone2"})
-    assert json.loads(text(result)) == {
-        "receiver": "127.0.0.1",
-        "zone": "zone2",
-        "power": "standby",
-        "volume": 40.0,
-        "muted": False,
-        "input": "same-as-main",
-    }
+    assert list(zones(result)) == ["zone2"]  # just the zone asked for
+    assert zones(result)["zone2"]["power"] == "standby"
 
 
 async def test_zone2_on_net_at_capped_volume(client, receiver):
@@ -403,8 +443,8 @@ async def test_playing_station_still_listed_and_playable(client, receiver):
 async def test_no_host_uses_the_one_discovered_receiver(fake, configure):
     configure(settings_for(fake, receivers=()))  # nothing configured: discovery decides
     async with Client(server.mcp) as c:
-        result = json.loads(text(await c.call_tool("get_status", {})))
-        assert result["receiver"] == "127.0.0.1"  # the fake answered discovery
+        result = (await c.call_tool("get_status", {})).structured_content
+        assert result["receivers"][0]["host"] == "127.0.0.1"  # the fake answered discovery
         assert server.registry()._discovered is not None  # remembered for later calls
 
 
@@ -530,3 +570,20 @@ async def test_garbled_menu_list_is_a_readable_error(client, receiver, fake):
     result = await client.call_tool("list_stations", {"service": "pandora"})
     assert result.is_error
     assert "couldn't be read" in text(result)
+
+
+async def test_unreachable_receiver_is_reported_not_raised(fake, configure):
+    fake.port = free_port()
+    configure(settings_for(fake))
+    async with Client(server.mcp) as c:
+        result = await c.call_tool("get_status", {})
+    assert not result.is_error
+    (r,) = result.structured_content["receivers"]
+    assert (r["reachable"], r["zones"]) == (False, [])
+    assert "Can't connect" in r["error"]
+
+
+async def test_zone_without_volume_control_reports_none(client, receiver):
+    receiver["NRI"] = receiver["NRI"].replace('name="Zone2" volmax="100"', 'name="Zone2" volmax="0"')
+    z2 = zones(await client.call_tool("get_status", {}))["zone2"]
+    assert (z2["volume"], z2["volume_control"]) == (None, False)

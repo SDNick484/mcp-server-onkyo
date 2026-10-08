@@ -37,6 +37,7 @@ from xml.etree import ElementTree
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 from . import eiscp
 from .codes import (
@@ -57,7 +58,7 @@ from .codes import (
     volume_to_raw,
 )
 from .config import Settings, load_settings
-from .receivers import Receiver, ReceiverError, Registry, Session
+from .receivers import Receiver, ReceiverError, Registry, Session, Unreachable
 
 # Everything goes through this logger (and its children), which writes to
 # stderr: on the stdio transport, stdout belongs to JSON-RPC. Silent
@@ -233,7 +234,7 @@ class Call:
                 if power == "00":
                     how = "set_power" if zone == "main" else f"set_power with zone={zone!r}"
                     raise ReceiverError(f"{self.who(zone)} is in standby. Turn it on with {how} first.") from exc
-            raise ReceiverError(
+            raise Unreachable(
                 f"{self.who(zone)} didn't reply in time. If it was just turned on, it may still be starting up "
                 "(some models take about 15 seconds): wait a few seconds and try again."
             ) from exc
@@ -243,7 +244,7 @@ class Call:
                 "with --debug and look at the eISCP traffic."
             ) from exc
         except OSError as exc:
-            raise ReceiverError(
+            raise Unreachable(
                 f"Can't connect to {self.who()[0].lower()}{self.who()[1:]} ({exc}). Check the address, and that the "
                 "receiver is on the network."
             ) from exc
@@ -330,55 +331,134 @@ ZoneArg = Annotated[
 ]
 
 
-@mcp.tool(title="Get receiver status", annotations=READ_ONLY)
-async def get_status(receiver: ReceiverArg = None, zone: ZoneArg = "main") -> dict[str, Any]:
-    """Get the status of one zone: pass zone="zone2" (or "zone3") for another
-    room; the default is the main zone. Returns power state, volume (0-100),
-    mute state and selected input, plus, for the main zone, the listening
-    mode and "other_zones": the power state of each other zone the receiver
-    has, so you know which to ask about."""
-    async with call(receiver) as c:
-        await check_zone(c, zone)
-        codes = ZONE_CODES[zone]
-        power = await c.ask(f"{codes['power']}QSTN", codes["power"], zone=zone)
-        if power == "N/A":
-            raise ReceiverError(f"{c.who()} doesn't have {ZONE_LABELS[zone]}.")
-        volume = await c.ask(f"{codes['volume']}QSTN", codes["volume"], zone=zone)
-        mute = await c.ask(f"{codes['mute']}QSTN", codes["mute"], zone=zone)
-        source = await c.ask(f"{codes['input']}QSTN", codes["input"], zone=zone)
-        status: dict[str, Any] = {
-            "receiver": c.receiver.label,  # so the model can tell answers from different receivers apart
-            "zone": zone,
-            "power": "on" if power == "01" else "standby",
-            "volume": raw_to_volume(volume, c.steps) if volume and volume != "N/A" else None,
-            "muted": mute == "01",
-            # Unknown codes (not in our tables) are shown raw, e.g. "SLI2C"
-            "input": CODE_SOURCES.get(source, f"{codes['input']}{source}") if source and source != "N/A" else None,
-        }
-        if zone == "main":  # zones 2/3 have no surround processing
-            mode = await c.ask("LMDQSTN", "LMD")
-            status["listening_mode"] = CODE_MODES.get(mode, f"LMD{mode}") if mode and mode != "N/A" else None
-            status["other_zones"] = await other_zones(c)
-        return status
+# --- status -----------------------------------------------------------------------------
+# get_status returns TypedDicts rather than dict[str, Any]: the SDK then
+# publishes an outputSchema, so clients know the fields without guessing, and
+# sends the value as structured content. They come from typing_extensions: on
+# Python 3.11, Pydantic rejects typing.TypedDict and the SDK silently drops
+# the schema (seen in mcp-server-shieldtv).
+class ZoneStatus(TypedDict):
+    zone: Zone
+    power: Literal["on", "standby"] | None  # None: the zone didn't answer
+    volume: float | None  # front-panel scale; None in standby or without volume control
+    volume_cap: float  # the most set_volume will set in this zone
+    volume_control: bool  # False: fixed-level output, or its amplifier drives other speakers
+    muted: bool | None
+    input: str | None  # a set_input name, or the raw code ("SLI2C") for inputs not in the table
+    listening_mode: str | None  # main zone only
 
 
-async def other_zones(c: Call) -> dict[str, str]:
-    """Power state of each zone besides main that the receiver says it has,
-    e.g. {"zone2": "on"}. Best effort: a zone that doesn't answer is left out."""
+class ReceiverStatus(TypedDict):
+    receiver: str  # its name, or its address: what to pass as `receiver`
+    host: str
+    model: str | None
+    reachable: bool
+    error: str | None  # why it's unreachable, when it is
+    zones: list[ZoneStatus]
+    # Zones that are on with input "net". They all play the receiver's one
+    # network player, so a station started for one plays in all of them.
+    net_zones: list[Zone]
+
+
+class Status(TypedDict):
+    dry_run: bool  # true: setters report what they would send, and send nothing
+    receivers: list[ReceiverStatus]
+
+
+ZoneFilter = Annotated[
+    Zone | None,
+    Field(description="Only this zone. Omit for every zone the receiver has (main, and zone2/zone3 if present)."),
+]
+
+
+def _value(reply: str) -> str | None:
+    return None if reply in ("", "N/A") else reply
+
+
+async def zone_status(c: Call, zone: Zone, volume_control: bool) -> ZoneStatus:
+    codes = ZONE_CODES[zone]
+    power = await c.ask(f"{codes['power']}QSTN", codes["power"], zone=zone)
+    if power == "N/A":
+        raise ReceiverError(f"{c.who()} doesn't have {ZONE_LABELS[zone]}.")
+    volume = _value(await c.ask(f"{codes['volume']}QSTN", codes["volume"], zone=zone)) if volume_control else None
+    mute = _value(await c.ask(f"{codes['mute']}QSTN", codes["mute"], zone=zone))
+    source = _value(await c.ask(f"{codes['input']}QSTN", codes["input"], zone=zone))
+    mode = _value(await c.ask("LMDQSTN", "LMD")) if zone == "main" else None  # zones 2/3 have no surround
+    return {
+        "zone": zone,
+        "power": "on" if power == "01" else "standby",
+        "volume": raw_to_volume(volume, c.steps) if volume else None,
+        "volume_cap": c.settings.cap(zone),
+        "volume_control": volume_control,
+        "muted": None if mute is None else mute == "01",
+        # Unknown codes (not in our tables) are shown raw, e.g. "SLI2C"
+        "input": CODE_SOURCES.get(source, f"{codes['input']}{source}") if source else None,
+        "listening_mode": CODE_MODES.get(mode, f"LMD{mode}") if mode else None,
+    }
+
+
+async def zones_of(c: Call) -> dict[Zone, bool]:
+    """The zones this receiver has, each with whether it has volume control,
+    from its self-description. Without one (older models), just the main zone."""
     try:
         layout = await c.session.layout()
     except _READ_ERRORS:
-        return {}
-    zones: dict[str, str] = {}
-    for zone, info in (layout.zones if layout else {}).items():
-        if zone != "main" and info.present:
-            code = ZONE_CODES[zone]["power"]
-            try:
-                power = await c.session.request(f"{code}QSTN", code)
-            except _READ_ERRORS:
-                continue
-            zones[zone] = "on" if power == "01" else "standby"
+        layout = None
+    zones: dict[Zone, bool] = {"main": True}
+    if layout is not None:
+        zones.update({z: info.volume for z, info in layout.zones.items() if info.present and z != "main"})
     return zones
+
+
+async def receiver_status(c: Call, only: Zone | None) -> ReceiverStatus:
+    zones = await zones_of(c)
+    if only is not None:
+        await check_zone(c, only)
+        zones = {only: zones.get(only, True)}
+    statuses = [await zone_status(c, z, control) for z, control in zones.items()]
+    return {
+        "receiver": c.receiver.label,  # so the model can tell answers from different receivers apart
+        "host": c.host,
+        "model": c.receiver.model,
+        "reachable": True,
+        "error": None,
+        "zones": statuses,
+        "net_zones": [z["zone"] for z in statuses if z["power"] == "on" and z["input"] == "net"],
+    }
+
+
+@mcp.tool(title="Get receiver status", annotations=READ_ONLY)
+async def get_status(receiver: ReceiverArg = None, zone: ZoneFilter = None) -> Status:
+    """Start here. For each receiver, each zone's power, volume (0-100), the
+    volume cap, mute and input, and the main zone's listening mode. Without
+    `receiver`, covers every configured receiver; a receiver that can't be
+    reached is listed with reachable=false and the reason. net_zones lists
+    the zones playing the receiver's one, shared network player."""
+    reg = registry()
+    targets = [await reg.pick(receiver)] if receiver is not None or len(reg.receivers) <= 1 else reg.all()
+    results: list[ReceiverStatus] = []
+    for r in targets:
+        try:
+            async with r.session(reg.settings.timeout) as session:
+                results.append(await receiver_status(Call(r, session, reg.settings), zone))
+        except ReceiverError as exc:
+            # An unreachable receiver is a status, reported alongside the rest.
+            # Anything else about an explicitly requested zone (e.g. a zone the
+            # receiver doesn't have) is the caller's mistake: say so.
+            if zone is not None and not isinstance(exc, Unreachable):
+                raise
+            results.append(
+                {
+                    "receiver": r.label,
+                    "host": r.host,
+                    "model": r.model,
+                    "reachable": False,
+                    "error": str(exc),
+                    "zones": [],
+                    "net_zones": [],
+                }
+            )
+    return {"dry_run": reg.settings.dry_run, "receivers": results}
 
 
 async def check_zone(c: Call, zone: Zone, volume: bool = False) -> None:

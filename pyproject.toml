@@ -9,8 +9,9 @@ authors = [{ name = "Nicholas E. Andrade" }]
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=2.2",
-    "pyjwt[crypto]>=2.10",   # verifying Cloudflare Access assertions (onkyo_remote.py)
-    "uvicorn>=0.31",         # the HTTP transport (onkyo_remote.py)
+    "pyjwt[crypto]>=2.10",   # verifying Cloudflare Access assertions (remote.py)
+    "uvicorn>=0.31",         # the HTTP transport (remote.py)
+    "typing_extensions>=4.7",  # TypedDict tool results that keep their schema on Python 3.11
 ]
 keywords = ["mcp", "model-context-protocol", "onkyo", "eiscp", "av-receiver", "home-automation"]
 classifiers = [

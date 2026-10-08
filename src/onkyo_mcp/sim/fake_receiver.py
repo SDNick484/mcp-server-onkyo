@@ -335,8 +335,10 @@ def free_port() -> int:
 
 
 # Two different receivers, for `simulate` and multi-receiver tests: the
-# owner's pair. The TX-NR7100's Zone 2 drives height speakers, so it has no
-# Zone 2 volume control (as its NRI reported).
+# owner's pair. The owner's TX-NR7100 uses its Zone 2 amplifier for height
+# speakers, and on hardware its Zone 2 volume answered "N/A". The fake models
+# that as volmax="0" in its NRI; what the real NRI says is unconfirmed
+# (ASSUMPTION O-NRI-ZONES).
 PROFILES: dict[str, dict[str, Any]] = {
     "TX-NR6050": {"mac": "0009B0F76CFD"},
     "TX-NR7100": {"mac": "0009B0623D93"},
