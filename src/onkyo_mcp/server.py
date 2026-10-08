@@ -251,7 +251,12 @@ class Call:
                 f"{self.who(zone)} didn't reply in time. If it was just turned on, it may still be starting up "
                 "(some models take about 15 seconds): wait a few seconds and try again."
             ) from exc
-        except (ValueError, asyncio.IncompleteReadError) as exc:
+        except asyncio.IncompleteReadError as exc:
+            raise Unreachable(
+                f"{self.who()} closed the connection before answering {command[:3]}. It may be restarting, or "
+                "busy with another controller: try again in a few seconds."
+            ) from exc
+        except ValueError as exc:
             raise ReceiverError(
                 f"{self.who()} sent a reply that couldn't be read ({exc}). Try again; if it keeps happening, run "
                 "with --debug and look at the eISCP traffic."

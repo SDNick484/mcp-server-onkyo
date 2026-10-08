@@ -168,12 +168,22 @@ class Session:
         a garbled reply the connection is dropped (a late reply could
         otherwise be read as the answer to the next command) and the next
         request opens a fresh one."""
-        conn = await self._connection()
-        try:
-            return await conn.request(command, expect, timeout or self.timeout, until)
-        except (TimeoutError, ValueError, asyncio.IncompleteReadError, OSError):
-            await self.close()
-            raise
+        for attempt in (1, 2):
+            conn = await self._connection()
+            try:
+                return await conn.request(command, expect, timeout or self.timeout, until)
+            except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
+                # The receiver dropped the connection. A query is safe to ask
+                # again on a fresh one; a setter isn't retried here (it may
+                # have been applied before the drop).
+                await self.close()
+                if attempt == 2 or not command.endswith("QSTN"):
+                    raise
+                log.info("%s dropped the connection during %s; asking again", self.receiver.host, command)
+            except (TimeoutError, ValueError, OSError):
+                await self.close()
+                raise
+        raise AssertionError("unreachable")
 
     async def write(self, command: str) -> None:
         conn = await self._connection()

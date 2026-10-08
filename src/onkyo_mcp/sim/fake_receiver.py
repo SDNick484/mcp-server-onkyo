@@ -378,3 +378,56 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+class ReplayReceiver:
+    """A strict, scripted receiver for contract tests: it expects exactly the
+    commands in `exchanges`, in order, and answers each with its recorded
+    replies. Anything else is recorded in `mismatches` and the connection is
+    closed, so a test sees precisely where the server's traffic diverged from
+    the transcript (hand-built, or captured with `doctor --dump`)."""
+
+    def __init__(self, exchanges: list[dict[str, Any]], host: str = "127.0.0.1") -> None:
+        self.exchanges = list(exchanges)
+        self.host = host
+        self.port = 0
+        self.position = 0
+        self.mismatches: list[str] = []
+        self._server: asyncio.Server | None = None
+
+    async def start(self) -> ReplayReceiver:
+        self._server = await asyncio.start_server(self._handle, self.host, 0)
+        self.port = self._server.sockets[0].getsockname()[1]
+        return self
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+
+    @property
+    def finished(self) -> bool:
+        return self.position == len(self.exchanges)
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            while True:
+                header = await reader.readexactly(16)
+                _, header_size, data_size, _ = struct.unpack(">4sIIB3x", header)
+                await reader.readexactly(header_size - 16)
+                cmd = (await reader.readexactly(data_size)).decode("utf-8")[2:].strip()
+                if self.position >= len(self.exchanges):
+                    self.mismatches.append(f"unexpected extra command {cmd!r}")
+                    break
+                expected = self.exchanges[self.position]
+                if cmd != expected["send"]:
+                    self.mismatches.append(f"exchange {self.position}: expected {expected['send']!r}, got {cmd!r}")
+                    break
+                self.position += 1
+                for reply in expected["replies"]:
+                    writer.write(packet(reply))
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
