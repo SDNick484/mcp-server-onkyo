@@ -77,3 +77,9 @@ async def test_setter_skips_status_push_with_same_prefix(booting_receiver: int):
 async def test_query_takes_first_matching_message(booting_receiver: int):
     # A query has no value to compare against: any AMT message is the answer
     assert await send("127.0.0.1", booting_receiver, "AMTQSTN", expect="AMT") == "00"
+
+
+async def test_discovery_without_a_route_finds_nothing_instead_of_crashing():
+    # An address that can't be reached from here: sendto raises OSError on
+    # some systems and silently goes nowhere on others; either way, no crash.
+    assert await discover("240.0.0.1", 60128, timeout=0.1) == []

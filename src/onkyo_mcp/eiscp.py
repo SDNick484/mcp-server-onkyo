@@ -226,7 +226,11 @@ async def discover(address: str, port: int = DEFAULT_PORT, timeout: float = 3.0)
     transport, _ = await loop.create_datagram_endpoint(Listener, local_addr=("0.0.0.0", 0), allow_broadcast=True)
     try:
         log.debug("eISCP -> %s (UDP broadcast) ECNQSTN", address)
-        transport.sendto(build_packet("ECNQSTN", unit="x"), (address, port))
+        try:
+            transport.sendto(build_packet("ECNQSTN", unit="x"), (address, port))
+        except OSError as exc:  # no route for broadcasts here (no network, some containers)
+            log.warning("Discovery broadcast to %s failed: %s", address, exc)
+            return []
         await asyncio.sleep(timeout)  # collect every reply that arrives in the window
     finally:
         transport.close()
