@@ -13,6 +13,9 @@ Find receivers on your network (prints IP, model, MAC):
 Inspect interactively (shows tools/list, lets you call tools by hand):
     npx @modelcontextprotocol/inspector python onkyo_mcp.py
 
+Serve over HTTP instead (an always-on box behind Cloudflare Access; see README):
+    mcp-server-onkyo --http --port 8711
+
 Log MCP and eISCP traffic to stderr (either works; also with --discover):
     ONKYO_DEBUG=1 mcp-server-onkyo
     mcp-server-onkyo --debug
@@ -906,18 +909,35 @@ async def control_playback(action: PlaybackAction, receiver: Receiver = None) ->
                     f"right now (Pandora limits skips per hour and can't go back).")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    import argparse
     import sys
 
-    if DEBUG or "--debug" in sys.argv:
+    import onkyo_remote
+
+    parser = argparse.ArgumentParser(prog="mcp-server-onkyo", description="MCP server for Onkyo receivers")
+    parser.add_argument("--debug", action="store_true", help="log MCP and eISCP traffic to stderr")
+    parser.add_argument("--discover", action="store_true", help="list receivers on the LAN and exit")
+    onkyo_remote.add_http_arguments(parser, default_port=8711, default_path="/onkyo/mcp")
+    args = parser.parse_args(argv)
+
+    if DEBUG or args.debug:
         enable_debug()
 
-    if "--discover" in sys.argv:  # quick CLI check, no MCP involved
+    if args.discover:  # quick CLI check, no MCP involved
         receivers = asyncio.run(discover())
         for r in receivers:
             print(f"{r['host']:<16} {r['model']:<12} {r['mac']}  port {r['port']}")
         if not receivers:
             print("No receivers answered. See README: Troubleshooting.", file=sys.stderr)
+    elif args.http:
+        # A long-lived HTTP service, e.g. in an LXC behind Cloudflare Access
+        # (see onkyo_remote.py). Its logs go to stderr like everything else.
+        logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
+        try:
+            onkyo_remote.serve_http(mcp, onkyo_remote.http_config(args))
+        except onkyo_remote.ConfigError as exc:
+            parser.exit(2, f"mcp-server-onkyo: {exc}\n")
     else:
         # Defaults to stdio transport: JSON-RPC over stdin/stdout, which is why
         # nothing in the server may print() to stdout.
