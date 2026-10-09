@@ -18,4 +18,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
       - run: pytest
+
+  # Install and run the service on Alpine (musl) under OpenRC, against the
+  # simulator. Docker directly, not `container:`: GitHub's JavaScript actions
+  # (checkout) don't run inside musl containers.
+  alpine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker run --rm -v "$PWD:/src" -w /src python:3.12-alpine sh deploy/alpine/smoke-test.sh

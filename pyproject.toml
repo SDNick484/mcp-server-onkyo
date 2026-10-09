@@ -1,6 +1,6 @@
 [project]
 name = "mcp-server-onkyo"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for controlling Onkyo AV receivers over eISCP"
 readme = "README.md"
 license = "MIT"
@@ -9,8 +9,9 @@ authors = [{ name = "Nicholas E. Andrade" }]
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=2.2",
-    "pyjwt[crypto]>=2.10",   # verifying Cloudflare Access assertions (onkyo_remote.py)
-    "uvicorn>=0.31",         # the HTTP transport (onkyo_remote.py)
+    "pyjwt[crypto]>=2.10",   # verifying Cloudflare Access assertions (remote.py)
+    "uvicorn>=0.31",         # the HTTP transport (remote.py)
+    "typing_extensions>=4.7",  # TypedDict tool results that keep their schema on Python 3.11
 ]
 keywords = ["mcp", "model-context-protocol", "onkyo", "eiscp", "av-receiver", "home-automation"]
 classifiers = [
@@ -25,18 +26,29 @@ Homepage = "https://github.com/SDNick484/mcp-server-onkyo"
 Issues = "https://github.com/SDNick484/mcp-server-onkyo/issues"
 
 [project.optional-dependencies]
-dev = ["pytest", "anyio", "httpx2"]
+dev = ["pytest>=8", "anyio>=4", "httpx2", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
-mcp-server-onkyo = "onkyo_mcp:main"
+mcp-server-onkyo = "onkyo_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-include = ["onkyo_mcp.py", "onkyo_remote.py"]
+packages = ["src/onkyo_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]       # so tests can import onkyo_mcp and fake_receiver
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, pyupgrade, bugbear, simplify (same as the siblings)
+select = ["E", "W", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+files = ["src"]
+strict = true
