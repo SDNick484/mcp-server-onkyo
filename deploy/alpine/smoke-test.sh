@@ -34,8 +34,8 @@ STEP='simulator'
 # A fake receiver, and the service pointed at it
 /opt/mcp-server-onkyo/venv/bin/mcp-server-onkyo simulate --model TX-NR6050 --port 60128 --write-config /tmp/sim &
 for _ in $(seq 50); do [ -e /tmp/sim/config.json ] && break; sleep 0.1; done
-cp /tmp/sim/config.json /etc/mcp-server-onkyo/config.json
-chown root:mcp-onkyo /etc/mcp-server-onkyo/config.json
+# install, not cp: busybox cp replaces the file with the source's mode (0644)
+install -m 0640 -o root -g mcp-onkyo /tmp/sim/config.json /etc/mcp-server-onkyo/config.json
 
 STEP='service start'
 # OpenRC in a container: it needs to believe it has booted, and that the

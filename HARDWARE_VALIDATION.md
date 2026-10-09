@@ -295,7 +295,7 @@ In the LXC (Alpine 3.20+, as root):
 apk add git
 git clone -b hardware-free https://github.com/SDNick484/mcp-server-onkyo.git /root/mcp-server-onkyo
 sh /root/mcp-server-onkyo/deploy/alpine/install.sh /root/mcp-server-onkyo
-cp ~/.config/mcp-server-onkyo/config.json /etc/mcp-server-onkyo/config.json   # or write it there
+install -m 0640 -o root -g mcp-onkyo config.json /etc/mcp-server-onkyo/   # step 2's, copied into the LXC
 rc-update add mcp-server-onkyo default && rc-service mcp-server-onkyo start
 curl -s http://127.0.0.1:8711/healthz
 su -s /bin/sh mcp-onkyo -c 'ONKYO_CONFIG_DIR=/etc/mcp-server-onkyo /opt/mcp-server-onkyo/venv/bin/mcp-server-onkyo doctor'
