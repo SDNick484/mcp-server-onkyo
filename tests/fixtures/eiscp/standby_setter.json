@@ -1,0 +1,12 @@
+{
+  "description": "set_mute while the main zone is in standby: a TX-NR7100 ignores the setter silently; the server asks the power state and explains.",
+  "source": "TX-NR7100 behavior in CLAUDE.md",
+  "assumptions": ["O-STANDBY-SILENT"],
+  "tool": "set_mute",
+  "args": {"muted": true},
+  "exchanges": [
+    {"send": "AMT01", "replies": []},
+    {"send": "PWRQSTN", "replies": ["PWR00"]}
+  ],
+  "expect_error": "is in standby. Turn it on with set_power first."
+}
