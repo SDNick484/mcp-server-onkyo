@@ -1,0 +1,12 @@
+{
+  "description": "set_volume 45 in Zone 2 of a TX-NR6050 (Zone 2 on).",
+  "source": "hand-built from the TX-NR6050 exchanges in CLAUDE.md; reply shapes as seen, values chosen",
+  "assumptions": ["O-ZONE2-CODES", "O-VOLUME-STEPS", "O-NRI-ZONES", "O-PUSHES"],
+  "tool": "set_volume",
+  "args": {"level": 45, "zone": "zone2"},
+  "exchanges": [
+    {"send": "NRIQSTN", "replies": ["NRI<?xml version=\"1.0\" encoding=\"utf-8\"?><response status=\"ok\"><device id=\"TX-NR6050\"><model>TX-NR6050</model><zonelist count=\"4\"><zone id=\"1\" value=\"1\" name=\"Main\" volmax=\"100\"/><zone id=\"2\" value=\"1\" name=\"Zone2\" volmax=\"100\"/><zone id=\"3\" value=\"0\" name=\"Zone3\" volmax=\"0\"/><zone id=\"4\" value=\"0\" name=\"Zone4\" volmax=\"0\"/></zonelist></device></response>"]},
+    {"send": "ZVL5A", "replies": ["NTM00:01:10/00:04:06", "ZVL50", "ZVL5A"]}
+  ],
+  "expect": {"outcome": "done", "detail": "Zone 2: Volume is now 45.0", "sent": ["ZVL5A"]}
+}

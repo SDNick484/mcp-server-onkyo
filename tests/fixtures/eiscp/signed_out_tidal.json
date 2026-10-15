@@ -1,0 +1,11 @@
+{
+  "description": "select_net_service tidal while signed out: the receiver opens a login popup (UI type 3) instead of the menu.",
+  "source": "popup title 'TIDAL Login' as seen on a TX-NR6050 (CLAUDE.md); status characters hand-built",
+  "assumptions": ["O-NSV-CODES"],
+  "tool": "select_net_service",
+  "args": {"service": "tidal"},
+  "exchanges": [
+    {"send": "NSV1B0", "replies": ["NLT1B31000000090100FF1B00TIDAL Login"]}
+  ],
+  "expect_error": "tidal isn't ready: the receiver shows \"TIDAL Login\""
+}

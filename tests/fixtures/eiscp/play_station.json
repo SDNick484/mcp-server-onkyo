@@ -1,0 +1,16 @@
+{
+  "description": "play_station 'pearl jam' on Pandora: open the service, read its list as XML, play item 3, confirmed by NSTP.",
+  "source": "NLT/NLA/NLSI/NST shapes from TX-NR6050 traffic described in CLAUDE.md; station names invented",
+  "assumptions": ["O-MENU-LISTS", "O-PLAY-STATE"],
+  "tool": "play_station",
+  "args": {"station": "pearl jam"},
+  "exchanges": [
+    {"send": "NSV040", "replies": ["NLT0401000000040100FF0400Pandora"]},
+    {"send": "NLAL00010100000004", "replies": ["NLAX0001S000<?xml version=\"1.0\" encoding=\"utf-8\"?><response status=\"ok\"><items offset=\"0\" totalitems=\"4\"><item icontype=\"G\" title=\"Create new station\" selectable=\"1\"/><item icontype=\"M\" title=\"Shuffle\" selectable=\"1\"/><item icontype=\"M\" title=\"Pearl Jam Radio\" selectable=\"1\"/><item icontype=\"-\" title=\"Sign Out\" selectable=\"1\"/></items></response>"]},
+    {"send": "NLSI00003", "replies": ["NSTSxx1", "NSTPxx1"]},
+    {"send": "NRIQSTN", "replies": ["NRIN/A"]},
+    {"send": "PWRQSTN", "replies": ["PWR01"]},
+    {"send": "SLIQSTN", "replies": ["SLI2B"]}
+  ],
+  "expect": {"outcome": "done", "detail": "Playing Pearl Jam Radio on pandora", "sent": ["NSV040", "NLSI00003"], "warnings": []}
+}
