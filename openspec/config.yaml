@@ -1,0 +1,44 @@
+schema: spec-driven
+
+context: |
+  Learning project for MCP server development: prefer small, readable changes,
+  and explain the MCP concepts a change touches.
+  Target hardware is the TX-NR7100 and TX-NR6050; hardware behavior observed on
+  them is recorded in CLAUDE.md and is authoritative over third-party command tables.
+
+rules:
+  tasks:
+    - Include tests that exercise the change against fake_receiver.py
+    - Include updating README.md's tool table, config table and roadmap when they are affected
+    - Include a manual check on real hardware when receiver behavior is involved
+
+# Project context (optional)
+# Add only constraints that should guide OpenSpec artifacts and workflows.
+# Include constraints an agent cannot infer by reading the code.
+# Keep general project documentation and discoverable codebase facts out.
+# Example:
+#   context: |
+#     Designs and tasks must cover Windows, macOS, and Linux
+#     Write all artifacts in Spanish
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
