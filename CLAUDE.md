@@ -18,9 +18,13 @@ changes over clever ones. Show the JSON-RPC traffic when it helps.
   hardware confirmed it. Cite ids in code (`# ASSUMPTION O-...`); `tests/test_assumptions.py`
   keeps code, README and HARDWARE_VALIDATION.md in step with it.
 - `src/onkyo_mcp/cli.py` — `serve` (default), `discover`, `doctor` (`doctor.py`), `simulate`, `call`.
-- `src/onkyo_mcp/remote.py`, `logsafe.py` — Streamable HTTP behind Cloudflare Access, and log
-  redaction. Shared, byte-identical, with mcp-server-shieldtv, -harmony and -sofabaton: change
-  them in all four.
+- **Shared with the siblings; the source of truth is mcp-server-shared.** `src/onkyo_mcp/remote.py`
+  (Streamable HTTP behind Cloudflare Access), `logsafe.py` (log redaction), `tasks.py`, `ratelimit.py`,
+  `scripts/sync_shared.py`, and `tests/test_remote.py`, `test_logsafe.py`, `test_tasks.py`,
+  `test_ratelimit.py` (rendered with this package's name); mcp-server-shared's `shared.toml` is the
+  full list. Don't edit them here: change them in mcp-server-shared, then run
+  `python scripts/sync_shared.py --update` here and commit the files together with `shared.lock`.
+  CI's `shared-drift` job fails on any difference from the locked commit.
 - `src/onkyo_mcp/sim/` — `fake_receiver.py` (simulated receivers with TX-NR6050 and TX-NR7100
   profiles, `Faults` for failure injection, `ReplayReceiver` for contract tests) and
   `transcript.py` (a `--debug` log to a contract-test fixture).
