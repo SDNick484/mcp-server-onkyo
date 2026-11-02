@@ -44,19 +44,20 @@ def only(result) -> dict:
 
 
 async def test_pick_by_name_ignoring_case_and_spaces(two, fake, fake2):
-    family = only(await two.call_tool("get_status", {"receiver": "family room"}))
-    theater = only(await two.call_tool("get_status", {"receiver": "THEATER"}))
+    family = only(await two.call_tool("onkyo_get_status", {"receiver": "family room"}))
+    theater = only(await two.call_tool("onkyo_get_status", {"receiver": "THEATER"}))
     assert (family["receiver"], family["zones"][0]["input"]) == ("Family Room", "bd-dvd")
     assert (theater["receiver"], theater["zones"][0]["input"]) == ("Theater", "game")
 
 
 async def test_pick_by_address(two, fake2):
-    assert only(await two.call_tool("get_status", {"receiver": f"127.0.0.1:{fake2.port}"}))["receiver"] == "Theater"
+    status = await two.call_tool("onkyo_get_status", {"receiver": f"127.0.0.1:{fake2.port}"})
+    assert only(status)["receiver"] == "Theater"
 
 
 async def test_status_without_receiver_covers_them_all(two, fake2):
     # Reads can't do harm, so instead of asking which, get_status covers every receiver
-    result = (await two.call_tool("get_status", {})).structured_content
+    result = (await two.call_tool("onkyo_get_status", {})).structured_content
     assert [r["receiver"] for r in result["receivers"]] == ["Family Room", "Theater"]
     theater = result["receivers"][1]
     # The TX-NR7100 profile: Zone 2 drives height speakers, so no volume control there
@@ -65,7 +66,7 @@ async def test_status_without_receiver_covers_them_all(two, fake2):
 
 async def test_one_unreachable_receiver_doesnt_hide_the_others(two, fake2):
     await fake2.stop()
-    result = (await two.call_tool("get_status", {})).structured_content
+    result = (await two.call_tool("onkyo_get_status", {})).structured_content
     assert [(r["receiver"], r["reachable"]) for r in result["receivers"]] == [
         ("Family Room", True),
         ("Theater", False),
@@ -75,11 +76,11 @@ async def test_one_unreachable_receiver_doesnt_hide_the_others(two, fake2):
 @pytest.mark.parametrize(
     "tool, args, code, value",
     [
-        ("set_power", {"state": "off"}, "PWR", "00"),
-        ("set_volume", {"level": 20}, "MVL", "28"),
-        ("set_mute", {"muted": True}, "AMT", "01"),
-        ("set_input", {"source": "tv"}, "SLI", "12"),
-        ("set_listening_mode", {"mode": "direct"}, "LMD", "01"),
+        ("onkyo_set_power", {"state": "off"}, "PWR", "00"),
+        ("onkyo_set_volume", {"level": 20}, "MVL", "28"),
+        ("onkyo_set_mute", {"muted": True}, "AMT", "01"),
+        ("onkyo_set_input", {"source": "tv"}, "SLI", "12"),
+        ("onkyo_set_listening_mode", {"mode": "direct"}, "LMD", "01"),
     ],
 )
 async def test_set_tools_change_only_the_named_receiver(two, fake, fake2, tool, args, code, value):
@@ -90,7 +91,7 @@ async def test_set_tools_change_only_the_named_receiver(two, fake, fake2, tool, 
     assert fake.state[code] == before  # the other receiver is untouched
 
 
-@pytest.mark.parametrize("tool, args", [("set_power", {"state": "off"}), ("set_volume", {"level": 20})])
+@pytest.mark.parametrize("tool, args", [("onkyo_set_power", {"state": "off"}), ("onkyo_set_volume", {"level": 20})])
 async def test_writes_without_receiver_are_refused_not_guessed(two, fake, fake2, tool, args):
     result = await two.call_tool(tool, args)
     assert result.is_error
@@ -100,7 +101,7 @@ async def test_writes_without_receiver_are_refused_not_guessed(two, fake, fake2,
 
 
 async def test_unknown_name_lists_the_receivers(two):
-    result = await two.call_tool("set_mute", {"muted": True, "receiver": "Kitchen"})
+    result = await two.call_tool("onkyo_set_mute", {"muted": True, "receiver": "Kitchen"})
     assert result.is_error
     assert "No receiver named 'Kitchen'. Receivers: Family Room" in text(result)
 
@@ -121,7 +122,7 @@ async def test_concurrent_calls_take_turns_on_one_receiver(fake, configure):
     # not open five connections at once: the receiver lock queues them.
     configure(settings_for(fake))
     async with Client(server.mcp) as c:
-        results = await asyncio.gather(*(c.call_tool("get_status", {}) for _ in range(5)))
+        results = await asyncio.gather(*(c.call_tool("onkyo_get_status", {}) for _ in range(5)))
     assert not any(r.is_error for r in results)
     assert fake.peak_connections == 1
 
@@ -130,8 +131,8 @@ async def test_calls_to_different_receivers_run_side_by_side(two, fake, fake2):
     fake.faults.delay = fake2.faults.delay = 0.05
     start = asyncio.get_running_loop().time()
     await asyncio.gather(
-        two.call_tool("set_mute", {"muted": True, "receiver": "Family Room"}),
-        two.call_tool("set_mute", {"muted": True, "receiver": "Theater"}),
+        two.call_tool("onkyo_set_mute", {"muted": True, "receiver": "Family Room"}),
+        two.call_tool("onkyo_set_mute", {"muted": True, "receiver": "Theater"}),
     )
     # One receiver's lock doesn't hold up the other: both finish in about one delay
     assert asyncio.get_running_loop().time() - start < 0.5

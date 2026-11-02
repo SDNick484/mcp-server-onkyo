@@ -34,7 +34,6 @@ from typing import Annotated, Any, Literal
 from xml.etree import ElementTree
 
 from mcp.server.mcpserver import MCPServer
-from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -58,7 +57,10 @@ from .codes import (
 )
 from .config import Settings, load_settings
 from .logsafe import RedactingFormatter
+from .lookup import unknown_with_suggestions
+from .ratelimit import TokenBucket, refusal
 from .receivers import Receiver, ReceiverError, Registry, Session, Unreachable
+from .tools import ACT, ACT_IDEMPOTENT, OPEN_WORLD_READ, READ_ONLY
 
 # Everything goes through this logger (and its children), which writes to
 # stderr: on the stdio transport, stdout belongs to JSON-RPC. Silent
@@ -107,10 +109,16 @@ async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
 mcp = MCPServer(
     "onkyo",
     instructions=(
-        "Controls Onkyo AV receivers on the local network. Call get_status first: it shows a receiver's "
-        "zones (main, zone2, zone3) with power, volume, mute and input. Pass `receiver` (a name or address) "
-        "when there are several, and `zone` for rooms other than the main one. Each receiver has one network "
-        'player, shared by every zone whose input is "net".'
+        "Controls Onkyo/Integra AV receivers on the local network. "
+        "In the home theater signal chain, the Onkyo AV Receiver acts as the "
+        "Audio Switcher and Master Volume Owner: media sources (such as NVIDIA Shield TV) "
+        "feed into AVR HDMI inputs (e.g. 'strm-box'), and the AVR routes video out to the "
+        "display (LG webOS TV) while powering speakers directly. Always adjust volume here via "
+        "onkyo_set_volume rather than on the display. Call onkyo_get_status first: it shows each "
+        "receiver's zones (main, zone2, zone3) with power, volume, mute, and input. Pass "
+        "`receiver` when multiple units are present, and `zone` for secondary rooms. "
+        "Each receiver features one hardware network streaming player, shared by every "
+        "zone whose input is 'net'."
     ),
     lifespan=lifespan,
 )
@@ -245,7 +253,7 @@ class Call:
                 except _READ_ERRORS:
                     power = None
                 if power == "00":
-                    how = "set_power" if zone == "main" else f"set_power with zone={zone!r}"
+                    how = "onkyo_set_power" if zone == "main" else f"onkyo_set_power with zone={zone!r}"
                     raise ReceiverError(f"{self.who(zone)} is in standby. Turn it on with {how} first.") from exc
             raise Unreachable(
                 f"{self.who(zone)} didn't reply in time. If it was just turned on, it may still be starting up "
@@ -303,19 +311,9 @@ async def call(receiver: str | None) -> AsyncIterator[Call]:
 # pays to state them.
 # ---------------------------------------------------------------------------
 
-# Queries: they change nothing on the receiver.
-# (destructiveHint and idempotentHint only matter when readOnlyHint is false.)
-READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
-
-# Setters: they change state, but nothing is lost that another call can't put
-# back (not destructive), and sending "volume 30" twice leaves the receiver
-# exactly as sending it once (idempotent). Closed world: they only talk to a
-# receiver we were pointed at, not the wider internet.
-SETTER = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
-
-# Playback controls change state but aren't idempotent: "next" twice skips
-# two tracks.
-PLAYBACK = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
+# Rate limiter protecting mechanical power relays from rapid on/off cycling:
+# Capacity of 2 cycles, refills 1 token every 30 seconds.
+_POWER_BUCKET = TokenBucket(capacity=2.0, rate=1.0 / 30.0)
 
 
 class FoundReceiver(TypedDict):
@@ -326,13 +324,18 @@ class FoundReceiver(TypedDict):
     mac: str
 
 
-# Discovery reads nothing but replies, so it is read-only. It is open-world,
-# though: it broadcasts to the whole LAN and lists whatever answers.
-@mcp.tool(title="Discover receivers", annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
-async def discover_receivers() -> list[FoundReceiver]:
-    """Find Onkyo/Integra/Pioneer receivers on the local network. Returns each
-    receiver's IP address, model, eISCP port and MAC address. Not needed when
-    receivers are configured: get_status lists those by name."""
+@mcp.tool(title="Discover receivers", annotations=OPEN_WORLD_READ)
+async def onkyo_discover_receivers() -> list[FoundReceiver]:
+    """
+    <use_case>
+    Find Onkyo, Integra, and Pioneer AV receivers on the local network.
+    Returns each receiver's IP address, model, eISCP port, and MAC address.
+    </use_case>
+    <important_notes>
+    - Broadcasts UDP packets to the LAN subnet; not needed when receivers are explicitly configured.
+    - Use `onkyo_get_status` instead to query configured receivers by name.
+    </important_notes>
+    """
     s = registry().settings
     found = await eiscp.discover(s.discovery_addr, s.discovery_port)
     return [{"host": r.host, "model": r.model, "port": r.port, "region": r.region, "mac": r.mac} for r in found]
@@ -489,7 +492,7 @@ def shared_player_note(on_net: list[Zone]) -> str:
     names = [ZONE_LABELS[z] for z in on_net]
     if not names:
         return (
-            'No zone is on input "net" yet, so nothing will be heard: use set_input with source="net" for the '
+            'No zone is on input "net" yet, so nothing will be heard: use onkyo_set_input with source="net" for the '
             "zone that should play it."
         )
     if len(names) > 1:
@@ -501,12 +504,18 @@ def shared_player_note(on_net: list[Zone]) -> str:
 
 
 @mcp.tool(title="Get receiver status", annotations=READ_ONLY)
-async def get_status(receiver: ReceiverArg = None, zone: ZoneFilter = None) -> Status:
-    """Start here. For each receiver, each zone's power, volume (0-100), the
-    volume cap, mute and input, and the main zone's listening mode. Without
-    `receiver`, covers every configured receiver; a receiver that can't be
-    reached is listed with reachable=false and the reason. net_zones lists
-    the zones playing the receiver's one, shared network player."""
+async def onkyo_get_status(receiver: ReceiverArg = None, zone: ZoneFilter = None) -> Status:
+    """
+    <use_case>
+    Query the operational status of configured AV receivers and their zones (main, zone2, zone3).
+    </use_case>
+    <important_notes>
+    - Start here before issuing control commands to inspect power, volume, input, and mute status.
+    - Without `receiver`, queries every configured receiver.
+    - Unreachable receivers report reachable=false alongside failure details.
+    - `net_zones` identifies which zones currently share the receiver's single network audio player.
+    </important_notes>
+    """
     reg = registry()
     targets = [await reg.pick(receiver)] if receiver is not None or len(reg.receivers) <= 1 else reg.all()
     results: list[ReceiverStatus] = []
@@ -574,7 +583,7 @@ async def rejected(c: Call, zone: Zone, otherwise: str) -> ReceiverError:
     except _READ_ERRORS:
         power = None
     if power == "00":
-        how = "set_power" if zone == "main" else f"set_power with zone={zone!r}"
+        how = "onkyo_set_power" if zone == "main" else f"onkyo_set_power with zone={zone!r}"
         return ReceiverError(f"{c.who(zone)} is in standby. Turn it on with {how} first.")
     return ReceiverError(otherwise)
 
@@ -617,12 +626,22 @@ def dry_run(c: Call, zone: Zone | None, would: str, commands: list[str]) -> Acti
     }
 
 
-@mcp.tool(title="Set power", annotations=SETTER)
-async def set_power(state: PowerState, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
-    """Turn a zone on, or off (standby): the main zone by default, or another
-    room with zone="zone2" / "zone3". Zones are independent: zone2 can play
-    while the main zone is in standby. After power-on, some receivers need
-    about 15 seconds before they accept other commands."""
+@mcp.tool(title="Set power", annotations=ACT_IDEMPOTENT)
+async def onkyo_set_power(state: PowerState, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
+    """
+    <use_case>
+    Turn an AV receiver zone on or put it into standby.
+    </use_case>
+    <important_notes>
+    - Defaults to the main zone; target other rooms with `zone="zone2"` or `zone="zone3"`.
+    - Zones operate independently (e.g., zone2 can play while main is in standby).
+    - Hardware relays are rate-limited to avoid physical wear; rapid cycles will be refused.
+    - Some models take up to 15 seconds after power-on before accepting audio/input commands.
+    </important_notes>
+    """
+    wait = _POWER_BUCKET.take(1.0)
+    if wait > 0:
+        raise ReceiverError(refusal(f"turn {zone} {state}", wait, "Onkyo receiver"))
     async with call(receiver) as c:
         await check_zone(c, zone)
         code = ZONE_CODES[zone]["power"]
@@ -644,13 +663,20 @@ async def set_power(state: PowerState, receiver: ReceiverArg = None, zone: ZoneA
         return result(c, zone, f"{zone_prefix(zone)}Power is now standby")
 
 
-@mcp.tool(title="Set volume", annotations=SETTER)
-async def set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
-    """Set the volume of any zone: the main zone by default, or another room
-    with zone="zone2" / "zone3". Uses the receiver's 0-100 display scale (0.5
-    steps on newer models), the same for every zone. Each zone has a safety
-    cap set by the owner (get_status shows it); a higher level is lowered to
-    the cap, and the reply says so."""
+@mcp.tool(title="Set volume", annotations=ACT_IDEMPOTENT)
+async def onkyo_set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
+    """
+    <use_case>
+    Set the volume level for a specific AV receiver zone.
+    </use_case>
+    <important_notes>
+    - Onkyo is the master audio owner in the signal chain; use this tool rather than TV
+      volume when external speakers/AVR are used.
+    - Accepts 0-100 on the front-panel scale (supports 0.5 increments on newer receivers).
+    - Levels exceeding the configured zone safety cap are automatically clamped.
+    - Zones feeding fixed-level amplifiers will reject volume adjustments.
+    </important_notes>
+    """
     async with call(receiver) as c:
         await check_zone(c, zone, volume=True)
         cap = c.settings.cap(zone)
@@ -670,10 +696,17 @@ async def set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zone: Zon
         return result(c, zone, f"{zone_prefix(zone)}Volume is now {raw_to_volume(reply, c.steps)}", capped)
 
 
-@mcp.tool(title="Set mute", annotations=SETTER)
-async def set_mute(muted: bool, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
-    """Mute or unmute any zone: the main zone by default, or another room
-    with zone="zone2" / "zone3"."""
+@mcp.tool(title="Set mute", annotations=ACT_IDEMPOTENT)
+async def onkyo_set_mute(muted: bool, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
+    """
+    <use_case>
+    Mute or unmute the audio output of an AV receiver zone.
+    </use_case>
+    <important_notes>
+    - Defaults to the main zone; pass `zone` to mute secondary speaker zones.
+    - Does not alter volume level settings, only toggles mute state.
+    </important_notes>
+    """
     async with call(receiver) as c:
         await check_zone(c, zone)
         code = ZONE_CODES[zone]["mute"]
@@ -686,14 +719,19 @@ async def set_mute(muted: bool, receiver: ReceiverArg = None, zone: ZoneArg = "m
         return result(c, zone, zone_prefix(zone) + ("Muted" if reply == "01" else "Unmuted"))
 
 
-@mcp.tool(title="Select input", annotations=SETTER)
-async def set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
-    """Select the input of any zone: the main zone by default, or another
-    room with zone="zone2" / "zone3". Names match the receiver's front-panel
-    labels (e.g. "bd-dvd" for the BD/DVD input, "net" for network streaming).
-    "same-as-main" (zone2/zone3 only) plays whatever the main zone is playing.
-    Some receivers only change a zone's input while it is on; turn it on
-    first if this says it's in standby."""
+@mcp.tool(title="Select input", annotations=ACT_IDEMPOTENT)
+async def onkyo_set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
+    """
+    <use_case>
+    Switch the active input source for an AV receiver zone.
+    </use_case>
+    <important_notes>
+    - Names correspond to physical inputs: "bd-dvd", "cbl-sat", "game", "strm-box", "tv", "net", etc.
+    - In home theater setups, streaming media devices (e.g. Shield TV) feed AVR inputs such as "strm-box".
+    - "same-as-main" is valid only for zone2 and zone3.
+    - Secondary zones may require being powered on prior to switching inputs.
+    </important_notes>
+    """
     if source == "same-as-main" and zone == "main":
         raise ReceiverError('"same-as-main" only applies to zone2 and zone3.')
     async with call(receiver) as c:
@@ -720,13 +758,29 @@ async def set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg 
         return result(c, zone, f"{zone_prefix(zone)}Input is now {CODE_SOURCES.get(reply, code + reply)}", warnings)
 
 
-@mcp.tool(title="Set listening mode", annotations=SETTER)
-async def set_listening_mode(mode: ListeningMode, receiver: ReceiverArg = None) -> ActionResult:
-    """Set the main zone's listening mode (surround processing). "direct" and
-    "pure-audio" play the source unprocessed; "dolby-surround" and
-    "dts-neural-x" upmix to all speakers and play Dolby Atmos / DTS:X content
-    natively. The receiver must be on, and may reject modes that don't suit
-    the current input signal."""
+@mcp.tool(title="Set listening mode", annotations=ACT_IDEMPOTENT)
+async def onkyo_set_listening_mode(mode: ListeningMode, receiver: ReceiverArg = None) -> ActionResult:
+    """
+    <use_case>
+    Set the main zone's surround sound or listening mode.
+    </use_case>
+    <important_notes>
+    - Applies only to the main zone (surround audio processing).
+    - "direct" and "pure-audio" bypass DSP; "dolby-surround" and "dts-neural-x" upmix audio to spatial layouts.
+    - Receiver may reject modes that are incompatible with the incoming audio stream.
+    </important_notes>
+    """
+    async with call(receiver) as c:
+        command = f"LMD{MODE_CODES[mode]}"
+        if c.dry_run:
+            return dry_run(c, "main", f"set the listening mode to {mode}", [command])
+        reply = await c.ask(command, "LMD")
+        if reply == "N/A":
+            raise ReceiverError(
+                f"The receiver rejected listening mode {mode!r}: it may be off, or the mode may not suit the "
+                "current input signal (e.g. dts-neural-x on a PCM stereo source)."
+            )
+        return result(c, "main", f"Listening mode is now {CODE_MODES.get(reply, f'LMD{reply}')}")
     async with call(receiver) as c:
         command = f"LMD{MODE_CODES[mode]}"
         if c.dry_run:
@@ -740,16 +794,19 @@ async def set_listening_mode(mode: ListeningMode, receiver: ReceiverArg = None) 
         return result(c, "main", f"Listening mode is now {CODE_MODES.get(reply, f'LMD{reply}')}")
 
 
-@mcp.tool(title="Select network service", annotations=SETTER)
-async def select_net_service(service: NetService, receiver: ReceiverArg = None) -> ActionResult:
-    """Switch the receiver's network audio to a streaming service, e.g.
-    Pandora. There is one network player per receiver, shared by every zone
-    whose input is "net": set a zone's input to "net" (set_input) to hear it.
-    The service must be offered by this receiver and signed in (usually in the
-    Onkyo Controller app). Switching stops whatever another service was
-    playing. "airplay" and "spotify" are normally started from a
-    phone (AirPlay, Spotify Connect); selecting them here may only make the
-    receiver wait for one. Call get_now_playing afterwards to see what plays."""
+@mcp.tool(title="Select network service", annotations=ACT_IDEMPOTENT)
+async def onkyo_select_net_service(service: NetService, receiver: ReceiverArg = None) -> ActionResult:
+    """
+    <use_case>
+    Select a streaming audio service (e.g., Pandora, Spotify, TuneIn) on the receiver's network player.
+    </use_case>
+    <important_notes>
+    - The receiver has one network player shared across all zones whose input is set to "net".
+    - To hear audio, set the desired zone's input to "net" via `onkyo_set_input`.
+    - The requested service must be configured and authenticated on the receiver.
+    - Call `onkyo_get_now_playing` to monitor playback after selection.
+    </important_notes>
+    """
     code = NET_SERVICE_CODES[service]
     async with call(receiver) as c:
         command = f"NSV{code}0"  # "0": no account details included
@@ -773,7 +830,7 @@ async def select_net_service(service: NetService, receiver: ReceiverArg = None) 
 class NetServiceInfo(TypedDict):
     code: str  # the receiver's NSV code
     receiver_name: str  # what the receiver calls it
-    name: str | None  # what select_net_service calls it; None if this server has no name for it
+    name: str | None  # what onkyo_select_net_service calls it; None if this server has no name for it
     selectable: bool
 
 
@@ -783,11 +840,16 @@ class NetServices(TypedDict):
 
 
 @mcp.tool(title="List network services", annotations=READ_ONLY)
-async def list_net_services(receiver: ReceiverArg = None) -> NetServices:
-    """The streaming services this receiver offers, as it lists them itself.
-    selectable=true ones can be passed to select_net_service (by `name`);
-    others are listed so you can tell the user they exist but this server
-    can't switch to them yet. A service still has to be signed in to play."""
+async def onkyo_list_net_services(receiver: ReceiverArg = None) -> NetServices:
+    """
+    <use_case>
+    List the available streaming network services supported and reported by the receiver.
+    </use_case>
+    <important_notes>
+    - Entries marked `selectable: true` can be passed to `onkyo_select_net_service`.
+    - Older models without self-description describe only standard services.
+    </important_notes>
+    """
     async with call(receiver) as c:
         try:
             layout = await c.session.layout()
@@ -797,7 +859,7 @@ async def list_net_services(receiver: ReceiverArg = None) -> NetServices:
     if layout is None or not layout.net_services:
         raise ReceiverError(
             f"{label} doesn't list its network services (older models don't describe themselves). "
-            f"select_net_service still accepts: {', '.join(NET_SERVICE_CODES)}."
+            f"onkyo_select_net_service still accepts: {', '.join(NET_SERVICE_CODES)}."
         )
     names = {code: name for name, code in NET_SERVICE_CODES.items()}
     return {
@@ -821,7 +883,7 @@ def not_ready(service: str, screen: str) -> str:
 
 class NowPlaying(TypedDict):
     receiver: str
-    service: str | None  # select_net_service name ("pandora"), "usb"/"bluetooth", or None at the top menu
+    service: str | None  # onkyo_select_net_service name ("pandora"), "usb"/"bluetooth", or None at the top menu
     station: str | None  # e.g. "Pearl Jam Radio"
     menu: str | None  # the menu on the receiver's screen; can differ from what plays
     state: str | None  # playing, paused, stopped, fast-forward, rewind, end
@@ -832,11 +894,17 @@ class NowPlaying(TypedDict):
 
 
 @mcp.tool(title="Get now playing", annotations=READ_ONLY)
-async def get_now_playing(receiver: ReceiverArg = None) -> NowPlaying:
-    """What the receiver's network player is playing: the service, play state,
-    title, artist, album and position, plus the menu its screen is showing
-    (which can differ: browsing doesn't stop playback). Every zone whose input
-    is "net" plays this; check get_status to see which zones are on "net"."""
+async def onkyo_get_now_playing(receiver: ReceiverArg = None) -> NowPlaying:
+    """
+    <use_case>
+    Retrieve metadata and playback state from the receiver's internal network player.
+    </use_case>
+    <important_notes>
+    - Reports active service, station, track title, artist, album, and playback elapsed time.
+    - Applicable to all zones configured with input="net".
+    - Menu on screen may differ from active playback during background browsing.
+    </important_notes>
+    """
     async with call(receiver) as c:
         # NMS (menu status) ends with the playing service's icon code, e.g.
         # "MxxxxS104" = Pandora. NLT is the menu on screen, e.g. "...NET" when
@@ -917,11 +985,17 @@ def pick(wanted: str, items: list[Item], what: str) -> Item:
     matches = [i for i in items if i[2].casefold() == key] or [i for i in items if key in i[2].casefold()]
     names = list(dict.fromkeys(title for _, _, title in matches))
     if not names:
-        available = ", ".join(dict.fromkeys(t for _, _, t in items[:30])) or "nothing"
-        more = " ..." if len(items) > 30 else ""
-        raise ReceiverError(f"No {what} matching {wanted!r}. Here: {available}{more}.")
+        candidates = [title for _, _, title in items]
+        msg = unknown_with_suggestions(
+            f"Active {what} menu",
+            wanted,
+            candidates,
+            limit=5,
+            fallback=f"Available: {', '.join(candidates[:15])}.",
+        )
+        raise ReceiverError(msg)
     if len(names) > 1:
-        raise ReceiverError(f"{wanted!r} matches several {what}s: {', '.join(names[:10])}. Which one?")
+        raise ReceiverError(f"{wanted!r} matches several {what}s: {', '.join(names[:10])}. Please specify which one.")
     return matches[0]
 
 
@@ -1004,26 +1078,29 @@ async def playing_service(c: Call) -> str | None:
 class StationList(TypedDict):
     service: str
     folder: list[str]
-    playable: list[str]  # names play_station accepts (with the same folder)
+    playable: list[str]  # names onkyo_play_station accepts (with the same folder)
     folders: list[str]  # names to add to `folder` to look inside
     truncated: str | None
     message: str | None
 
 
-@mcp.tool(title="List stations", annotations=SETTER)
-async def list_stations(
+@mcp.tool(title="List stations", annotations=ACT_IDEMPOTENT)
+async def onkyo_list_stations(
     service: NetService = "pandora",
     folder: FolderPath = (),
     receiver: ReceiverArg = None,
     interrupt: Interrupt = False,
 ) -> StationList:
-    """Browse a network service: list what can be played (stations, tracks)
-    and the folders at one level of its menu. Starts at the top (for Pandora:
-    your stations); to look inside a folder, call again with its name added to
-    `folder` (e.g. TuneIn: ["My Presets"]). Pass a playable name, with the
-    same `folder`, to play_station. Browsing the service that's playing doesn't
-    interrupt it. Opening a *different* service would stop the music, so that
-    is refused unless interrupt=true (ask the user first)."""
+    """
+    <use_case>
+    Browse content, station playlists, and folders within a network streaming service.
+    </use_case>
+    <important_notes>
+    - Navigate hierarchies by supplying intermediate directory names in `folder`.
+    - Playable items returned can be passed directly to `onkyo_play_station`.
+    - Switching away from an active playing service will stop music unless `interrupt=True` is provided.
+    </important_notes>
+    """
     async with call(receiver) as c:
         code = NET_SERVICE_CODES[service]
         if c.dry_run:
@@ -1069,16 +1146,20 @@ async def list_stations(
     }
 
 
-@mcp.tool(title="Play station", annotations=SETTER)
-async def play_station(
+@mcp.tool(title="Play station", annotations=ACT_IDEMPOTENT)
+async def onkyo_play_station(
     station: str, service: NetService = "pandora", folder: FolderPath = (), receiver: ReceiverArg = None
 ) -> ActionResult:
-    """Start playing a station or track from a network service, by name (e.g.
-    "Pearl Jam Radio" on Pandora). Names come from list_stations; a
-    distinctive part of a name is enough ("pearl jam"). For items inside
-    folders (TuneIn presets, a music server's albums), pass the same `folder`
-    list_stations used. It plays in every zone whose input is "net": set a
-    zone's input to "net" first to hear it."""
+    """
+    <use_case>
+    Initiate playback of a specific station, track, or preset from a network service.
+    </use_case>
+    <important_notes>
+    - Station names can be discovered via `onkyo_list_stations`.
+    - For nested content, supply the identical `folder` hierarchy used during browsing.
+    - Audio routes to every zone currently switched to input "net".
+    </important_notes>
+    """
     async with call(receiver) as c:
         if c.dry_run:
             code = NET_SERVICE_CODES[service]
@@ -1117,12 +1198,18 @@ PLAYBACK_CODES: dict[str, tuple[str, str | None]] = {
 }
 
 
-@mcp.tool(title="Control playback", annotations=PLAYBACK)
-async def control_playback(action: PlaybackAction, receiver: ReceiverArg = None) -> ActionResult:
-    """Play, pause, stop, or skip to the next/previous track on the network
-    player (shared by every zone on "net"). "play" resumes what was paused;
-    to start a station, use play_station. Services limit skipping: Pandora
-    allows a few skips per hour and can't go back."""
+@mcp.tool(title="Control playback", annotations=ACT)
+async def onkyo_control_playback(action: PlaybackAction, receiver: ReceiverArg = None) -> ActionResult:
+    """
+    <use_case>
+    Send transport playback commands (play, pause, stop, next, previous) to the network player.
+    </use_case>
+    <important_notes>
+    - Controls the single shared network media player.
+    - "play" resumes paused media; use `onkyo_play_station` to launch new stations.
+    - Track skip availability is contingent on service rules (e.g., Pandora hourly skip quotas).
+    </important_notes>
+    """
     code, state = PLAYBACK_CODES[action]
     async with call(receiver) as c:
         if c.dry_run:
@@ -1131,7 +1218,7 @@ async def control_playback(action: PlaybackAction, receiver: ReceiverArg = None)
             await c.ask(
                 f"NTC{code}",
                 f"NST{state}",
-                no_reply=f"The player didn't {action}. Is something selected? Start a station with play_station.",
+                no_reply=f"The player didn't {action}. Is something selected? Start a station with onkyo_play_station.",
             )
             return result(c, None, {"play": "Playing", "pause": "Paused", "stop": "Stopped"}[action])
         # A skip has no state to wait for: watch for the title to change
@@ -1248,7 +1335,7 @@ async def receivers_resource() -> str:
         None
         if docs
         else "No receivers are configured: tools use the one receiver that answers discovery "
-        "(call discover_receivers to see what answers)."
+        "(call onkyo_discover_receivers to see what answers)."
     )
     return json.dumps({"dry_run": reg.settings.dry_run, "receivers": docs, "note": note}, indent=1)
 
@@ -1277,7 +1364,7 @@ async def receiver_resource(receiver: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Prompts: workflows the *user* picks (e.g. as /mcp__onkyo__play_music in
+# Prompts: workflows the *user* picks (e.g. as /mcp__onkyo__onkyo_play_music in
 # Claude Code). A prompt is just text with arguments filled in; the model then
 # carries it out with the tools, so each one names the tools in order and the
 # traps to watch for. They are deliberately about this server only: a
@@ -1290,55 +1377,61 @@ def _target(receiver: str, zone: str = "") -> str:
 
 
 @mcp.prompt(title="Play music in a room")
-def play_music(room: str, service: str = "", station: str = "", volume: str = "") -> str:
+def onkyo_play_music(room: str, service: str = "", station: str = "", volume: str = "") -> str:
     """Turn on the zone for a room, switch it to the network player and start a service or station."""
     want = f"{service} " if service else ""
     want += f"station {station!r}" if station else "(whatever I choose; ask me if unsure)"
     return (
         f"Play {want} in the {room}. Please:\n"
-        f"1. Call get_status. Work out which receiver and zone is the {room!r} from the receiver names and "
+        f"1. Call onkyo_get_status. Work out which receiver and zone is the {room!r} from the receiver names and "
         "zones; if it's ambiguous, ask me instead of guessing.\n"
-        '2. If that zone is in standby, call set_power with state="on" (and its zone). A receiver can take '
+        '2. If that zone is in standby, call onkyo_set_power with state="on" (and its zone). A receiver can take '
         "about 15 seconds after power-on before it accepts other commands; if one times out, wait and retry.\n"
-        '3. Call set_input with source="net" for that zone.\n'
+        '3. Call onkyo_set_input with source="net" for that zone.\n'
         + (
-            f"4. Call select_net_service with service={service!r}. If it says the service needs signing in, "
+            f"4. Call onkyo_select_net_service with service={service!r}. If it says the service needs signing in, "
             "stop and tell me.\n"
             if service
-            else "4. If I didn't name a service, call list_net_services and ask me which.\n"
+            else "4. If I didn't name a service, call onkyo_list_net_services and ask me which.\n"
         )
         + (
-            f"5. Call list_stations, then play_station with the closest match to {station!r}.\n"
+            f"5. Call onkyo_list_stations, then onkyo_play_station with the closest match to {station!r}.\n"
             if station
-            else "5. If the service has stations, call list_stations and play_station with the one I want.\n"
+            else (
+                "5. If the service has stations, call onkyo_list_stations and onkyo_play_station with the one I want.\n"
+            )
         )
-        + (f"6. Call set_volume with level={volume} for that zone.\n" if volume else "6. Leave the volume alone.\n")
-        + "7. Tell me what's playing (get_now_playing), and repeat any warning the tools gave: a receiver has "
+        + (
+            f"6. Call onkyo_set_volume with level={volume} for that zone.\n"
+            if volume
+            else "6. Leave the volume alone.\n"
+        )
+        + "7. Tell me what's playing (onkyo_get_now_playing), and repeat any warning the tools gave: a receiver has "
         'one network player, so every zone on "net" hears the same thing.'
     )
 
 
 @mcp.prompt(title="Set up for a movie")
-def movie_night(receiver: str = "", source: str = "", listening_mode: str = "", volume: str = "") -> str:
+def onkyo_movie_night(receiver: str = "", source: str = "", listening_mode: str = "", volume: str = "") -> str:
     """The receiver's part of a movie night: main zone on, the video input, a surround mode, a sensible volume."""
     return (
         f"Get {_target(receiver)} ready for a movie. Please:\n"
-        "1. Call get_status for it and note the main zone's power, input and listening mode.\n"
-        '2. If the main zone is in standby, call set_power with state="on". Allow ~15 seconds before the next '
+        "1. Call onkyo_get_status for it and note the main zone's power, input and listening mode.\n"
+        '2. If the main zone is in standby, call onkyo_set_power with state="on". Allow ~15 seconds before the next '
         "command if it was off.\n"
         + (
-            f"3. Call set_input with source={source!r}.\n"
+            f"3. Call onkyo_set_input with source={source!r}.\n"
             if source
             else "3. Keep the current input if it's a video source (bd-dvd, strm-box, cbl-sat, game, tv); "
             "otherwise ask me which input the player is on. Don't guess the wiring.\n"
         )
         + (
-            f"4. Call set_listening_mode with mode={listening_mode!r}.\n"
+            f"4. Call onkyo_set_listening_mode with mode={listening_mode!r}.\n"
             if listening_mode
             else "4. Leave the listening mode as it is unless I asked for one.\n"
         )
         + (
-            f"5. Call set_volume with level={volume}.\n"
+            f"5. Call onkyo_set_volume with level={volume}.\n"
             if volume
             else "5. Leave the volume where it is, and tell me its level.\n"
         )
@@ -1347,17 +1440,19 @@ def movie_night(receiver: str = "", source: str = "", listening_mode: str = "", 
 
 
 @mcp.prompt(title="Turn everything off")
-def all_off(receiver: str = "") -> str:
+def onkyo_all_off(receiver: str = "") -> str:
     """Put every zone that is on into standby, then confirm."""
     where = f"the receiver {receiver!r}" if receiver else "every configured receiver"
     status = (
-        f"get_status with receiver={receiver!r}" if receiver else "get_status (without a receiver: it covers them all)"
+        f"onkyo_get_status with receiver={receiver!r}"
+        if receiver
+        else "onkyo_get_status (without a receiver: it covers them all)"
     )
     return (
         f"Turn off every zone of {where}. Please:\n"
         f"1. Call {status}.\n"
-        '2. For each zone whose power is "on", call set_power with state="off", that receiver and that zone. '
+        '2. For each zone whose power is "on", call onkyo_set_power with state="off", that receiver and that zone. '
         "Turn each zone off separately: don't assume the main zone takes the others with it.\n"
-        "3. Call get_status again and tell me which zones are now in standby. Some receivers take up to 10 "
+        "3. Call onkyo_get_status again and tell me which zones are now in standby. Some receivers take up to 10 "
         "seconds to confirm standby; a timeout on power-off is worth one retry, not more."
     )
