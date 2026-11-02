@@ -109,7 +109,7 @@ async def _simulate(args: argparse.Namespace) -> int:
         (cfg_dir / "config.json").write_text(json.dumps(doc, indent=2) + "\n")
         print(f"\nWrote {cfg_dir / 'config.json'}. In another terminal:")
         print(f"  ONKYO_CONFIG_DIR={cfg_dir} mcp-server-onkyo doctor")
-        print(f"  ONKYO_CONFIG_DIR={cfg_dir} mcp-server-onkyo call get_status")
+        print(f"  ONKYO_CONFIG_DIR={cfg_dir} mcp-server-onkyo call onkyo_get_status")
         print(f"  ONKYO_CONFIG_DIR={cfg_dir} mcp-server-onkyo serve      # or add it to Claude Code/Desktop")
     else:
         print("(Pass --write-config DIR to have a config.json for these written for you.)")

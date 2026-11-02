@@ -179,10 +179,27 @@ class FakeReceiver:
     # --- lifecycle -------------------------------------------------------------------
     async def start(self, port: int = 0) -> FakeReceiver:
         """Listen on `port` (0: a free one); TCP and UDP use the same number, like a real receiver."""
-        self._server = await asyncio.start_server(self._handle, self.host, port)
-        self.port = self._server.sockets[0].getsockname()[1]
         loop = asyncio.get_running_loop()
-        self._udp, _ = await loop.create_datagram_endpoint(lambda: _Discovery(self), local_addr=(self.host, self.port))
+        for attempt in range(5):
+            if port == 0:
+                udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                udp_sock.bind((self.host, 0))
+                p = udp_sock.getsockname()[1]
+                udp_sock.setblocking(False)
+                self._udp, _ = await loop.create_datagram_endpoint(lambda: _Discovery(self), sock=udp_sock)
+            else:
+                p = port
+                self._udp, _ = await loop.create_datagram_endpoint(lambda: _Discovery(self), local_addr=(self.host, p))
+            try:
+                self._server = await asyncio.start_server(self._handle, self.host, p)
+                self.port = self._server.sockets[0].getsockname()[1]
+                break
+            except OSError:
+                if self._udp is not None:
+                    self._udp.close()
+                    self._udp = None
+                if attempt == 4 or port != 0:
+                    raise
         log.info("Fake %s on %s:%s", self.model, self.host, self.port)
         return self
 

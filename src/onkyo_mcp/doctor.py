@@ -35,11 +35,12 @@ from pathlib import Path
 from typing import Any
 
 from . import eiscp
-from .assumptions import unverified
+from .assumptions import ASSUMPTIONS, unverified
 from .codes import ZONE_CODES
 from .config import ReceiverSettings, Settings
 from .logsafe import redact
 from .receivers import Layout, parse_nri
+from .registry import doctor_summary
 
 # HARDWARE_VALIDATION.md step that covers each layer, for the hints.
 STEP = {"tcp": 2, "eiscp": 2, "describe": 3, "zones": 4, "discovery": 1}
@@ -247,5 +248,5 @@ def render(report: Report, redacted: bool = True) -> str:
 
 
 def to_json(report: Report, redacted: bool = True) -> str:
-    text = json.dumps({**asdict(report), "ok": report.ok}, indent=2)
+    text = json.dumps({**asdict(report), "ok": report.ok, "assumptions": doctor_summary(ASSUMPTIONS)}, indent=2)
     return redact(text) if redacted else text

@@ -2,7 +2,7 @@
   "description": "select_net_service pandora: NSV has no echo; the pushed NLT title confirms it. Main zone on net.",
   "source": "NLT string as quoted in CLAUDE.md / onkyo_mcp comments (seen on a TX-NR6050)",
   "assumptions": ["O-NSV-CODES", "O-NET-SHARED"],
-  "tool": "select_net_service",
+  "tool": "onkyo_select_net_service",
   "args": {"service": "pandora"},
   "exchanges": [
     {"send": "NSV040", "replies": ["NLSU0-", "NLT0401000000480100FF0400Pandora"]},

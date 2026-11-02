@@ -257,7 +257,7 @@ class Registry:
         if len(self.receivers) > 1:
             raise ReceiverError(
                 f"Several receivers are configured: {self.names()}. Pass the one you mean as `receiver` "
-                "(its name or address); call get_status without one to see them all."
+                "(its name or address); call onkyo_get_status without one to see them all."
             )
         return await self._discover_one()
 

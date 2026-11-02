@@ -71,10 +71,10 @@ def client(url: str, assertion: str | None) -> Client:
 
 async def test_tools_work_over_http_with_a_valid_assertion(fake, configure):
     async with serving(fake, configure) as url, client(url, token()) as c:
-        status = (await c.call_tool("get_status", {})).structured_content
+        status = (await c.call_tool("onkyo_get_status", {})).structured_content
         main = status["receivers"][0]["zones"][0]
         assert (main["power"], main["volume"]) == ("on", 40.0)
-        assert (await c.call_tool("set_volume", {"level": 30})).structured_content["detail"] == "Volume is now 30.0"
+        assert (await c.call_tool("onkyo_set_volume", {"level": 30})).structured_content["detail"] == "Volume is now 30.0"
     assert fake.state["MVL"] == "3C"
 
 
@@ -92,7 +92,7 @@ async def test_tools_work_over_http_with_a_valid_assertion(fake, configure):
 async def test_bad_assertions_never_reach_the_receiver(fake, configure, assertion):
     async with serving(fake, configure) as url, httpx2.AsyncClient() as http:
         headers = {remote.ACCESS_HEADER: assertion} if assertion else {}
-        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "set_power"}}
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "onkyo_set_power"}}
         resp = await http.post(url, json=body, headers=headers)
         assert (resp.status_code, resp.json()) == (403, {"error": "forbidden"})
     assert fake.received == []  # the receiver heard nothing
@@ -105,7 +105,7 @@ async def test_two_http_sessions_take_turns_on_the_receiver(fake, configure):
 
         async def session() -> list[bool]:
             async with client(url, token()) as c:
-                results = await asyncio.gather(*(c.call_tool("get_status", {}) for _ in range(4)))
+                results = await asyncio.gather(*(c.call_tool("onkyo_get_status", {}) for _ in range(4)))
                 return [r.is_error for r in results]
 
         assert await asyncio.gather(session(), session()) == [[False] * 4, [False] * 4]

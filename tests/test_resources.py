@@ -99,29 +99,29 @@ async def test_no_receivers_configured_explains_discovery(configure):
     configure(settings_for())
     async with Client(server.mcp) as c:
         doc = await read(c, "onkyo://receivers")
-    assert doc["receivers"] == [] and "discover_receivers" in doc["note"]
+    assert doc["receivers"] == [] and "onkyo_discover_receivers" in doc["note"]
 
 
 # --- prompts ----------------------------------------------------------------------------
-TOOL_NAME = re.compile(r"\b(?:get|set|select|list|play|control|discover)_[a-z_]+\b")
+TOOL_NAME = re.compile(r"\bonkyo_(?:get|set|select|list|play|control|discover)_[a-z_]+\b")
 
 
 async def test_prompts_are_listed_with_their_arguments(two):
     prompts = {p.name: p for p in (await two.list_prompts()).prompts}
-    assert set(prompts) == {"play_music", "movie_night", "all_off"}
-    required = {a.name for a in prompts["play_music"].arguments or [] if a.required}
+    assert set(prompts) == {"onkyo_play_music", "onkyo_movie_night", "onkyo_all_off"}
+    required = {a.name for a in prompts["onkyo_play_music"].arguments or [] if a.required}
     assert required == {"room"}
 
 
 @pytest.mark.parametrize(
     ("name", "args"),
     [
-        ("play_music", {"room": "patio"}),
-        ("play_music", {"room": "patio", "service": "pandora", "station": "Jazz", "volume": "30"}),
-        ("movie_night", {}),
-        ("movie_night", {"receiver": "Theater", "source": "strm-box", "listening_mode": "dolby-surround"}),
-        ("all_off", {}),
-        ("all_off", {"receiver": "Theater"}),
+        ("onkyo_play_music", {"room": "patio"}),
+        ("onkyo_play_music", {"room": "patio", "service": "pandora", "station": "Jazz", "volume": "30"}),
+        ("onkyo_movie_night", {}),
+        ("onkyo_movie_night", {"receiver": "Theater", "source": "strm-box", "listening_mode": "dolby-surround"}),
+        ("onkyo_all_off", {}),
+        ("onkyo_all_off", {"receiver": "Theater"}),
     ],
 )
 async def test_prompts_only_name_tools_that_exist(two, name, args):
@@ -135,7 +135,7 @@ async def test_prompts_only_name_tools_that_exist(two, name, args):
 
 
 async def test_prompt_fills_in_its_arguments(two):
-    text = (await two.get_prompt("play_music", {"room": "patio", "service": "pandora"})).messages[0].content.text
+    text = (await two.get_prompt("onkyo_play_music", {"room": "patio", "service": "pandora"})).messages[0].content.text
     assert "'patio'" in text and "service='pandora'" in text
-    text = (await two.get_prompt("movie_night", {})).messages[0].content.text
+    text = (await two.get_prompt("onkyo_movie_night", {})).messages[0].content.text
     assert "Don't guess the wiring" in text  # no source given: ask rather than pick an input

@@ -1,0 +1,12 @@
+services:
+  onkyo-mcp:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: sdnick484/mcp-server-onkyo:latest
+    container_name: mcp-server-onkyo
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - ONKYO_HOST=127.0.0.1
+      - ONKYO_HTTP_PORT=8711

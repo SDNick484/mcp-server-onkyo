@@ -75,9 +75,9 @@ async def test_a_debug_log_becomes_a_fixture_that_replays(fake, configure, caplo
     configure(settings_for(fake, names=("Family Room",)))
     with caplog.at_level(logging.DEBUG, logger="onkyo_mcp"):
         async with Client(server.mcp) as c:
-            live = await c.call_tool("set_volume", {"level": 30, "zone": "zone2", "receiver": "Family Room"})
+            live = await c.call_tool("onkyo_set_volume", {"level": 30, "zone": "zone2", "receiver": "Family Room"})
     fixture = from_log(caplog.text)
-    assert fixture["tool"] == "set_volume" and fixture["args"] == {"level": 30, "zone": "zone2"}
+    assert fixture["tool"] == "onkyo_set_volume" and fixture["args"] == {"level": 30, "zone": "zone2"}
     assert [e["send"] for e in fixture["exchanges"]][-1] == "ZVL3C"
 
     replay = await ReplayReceiver(fixture["exchanges"]).start()

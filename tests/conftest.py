@@ -21,6 +21,12 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def reset_power_bucket() -> None:
+    server._POWER_BUCKET.tokens = server._POWER_BUCKET.capacity
+    server._POWER_BUCKET._last = server._POWER_BUCKET.clock()
+
+
 @pytest.fixture
 async def fake() -> AsyncIterator[FakeReceiver]:
     """A fresh fake TX-NR6050 on a free port."""

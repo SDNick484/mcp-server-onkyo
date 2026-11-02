@@ -2,7 +2,7 @@
   "description": "play_station 'pearl jam' on Pandora: open the service, read its list as XML, play item 3, confirmed by NSTP.",
   "source": "NLT/NLA/NLSI/NST shapes from TX-NR6050 traffic described in CLAUDE.md; station names invented",
   "assumptions": ["O-MENU-LISTS", "O-PLAY-STATE"],
-  "tool": "play_station",
+  "tool": "onkyo_play_station",
   "args": {"station": "pearl jam"},
   "exchanges": [
     {"send": "NSV040", "replies": ["NLT0401000000040100FF0400Pandora"]},

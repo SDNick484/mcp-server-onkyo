@@ -26,22 +26,11 @@ Confidence is about the *claim*, judged from its source:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from collections.abc import Iterable
 
-Confidence = Literal["high", "medium", "low"]
-Status = Literal["simulator-only", "hardware-verified", "hardware-contradicted"]
-
-
-@dataclass(frozen=True)
-class Assumption:
-    id: str
-    claim: str
-    source: str
-    confidence: Confidence
-    status: Status = "simulator-only"
-    note: str = ""
-
+from .registry import Assumption, by_id
+from .registry import contradicted as _contradicted
+from .registry import unverified as _unverified
 
 ASSUMPTIONS: tuple[Assumption, ...] = (
     Assumption(
@@ -99,6 +88,7 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "observed: MVL60 read back as 48.0 on a TX-NR6050",
         "high",
         "hardware-verified",
+        "MVL60 read back as 48.0 on a TX-NR6050",
     ),
     Assumption(
         "O-ZONE2-CODES",
@@ -153,6 +143,7 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "observed on a TX-NR6050 while Pandora and the music server played",
         "high",
         "hardware-verified",
+        "observed on a TX-NR6050 while Pandora and the music server played",
     ),
     Assumption(
         "O-MENU-LISTS",
@@ -162,6 +153,7 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "observed on a TX-NR6050 (Pandora stations, TuneIn presets, a MiniDLNA library)",
         "high",
         "hardware-verified",
+        "observed on a TX-NR6050 (Pandora stations, TuneIn presets, a MiniDLNA library)",
     ),
     Assumption(
         "O-SOURCE-CODES",
@@ -179,8 +171,14 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     ),
 )
 
-BY_ID = {a.id: a for a in ASSUMPTIONS}
+BY_ID = by_id(ASSUMPTIONS)
 
 
-def unverified() -> list[Assumption]:
-    return [a for a in ASSUMPTIONS if a.status != "hardware-verified"]
+def unverified(assumptions: Iterable[Assumption] = ASSUMPTIONS) -> list[Assumption]:
+    """Still ``simulator-only``. A contradicted assumption was checked, so it isn't counted here."""
+    return _unverified(assumptions)
+
+
+def contradicted(assumptions: Iterable[Assumption] = ASSUMPTIONS) -> list[Assumption]:
+    """Seen wrong on hardware (``hardware-contradicted``); the code was changed to stop relying on them."""
+    return _contradicted(assumptions)
