@@ -232,7 +232,8 @@ async def test_setter_in_standby_says_so(client, receiver, fake, style):
     result = await client.call_tool("onkyo_set_volume", {"level": 20})
     assert result.is_error
     assert text(result) == (
-        "Error executing tool onkyo_set_volume: The receiver at 127.0.0.1 is in standby. Turn it on with onkyo_set_power first."
+        "Error executing tool onkyo_set_volume: The receiver at 127.0.0.1 is in standby. "
+        "Turn it on with onkyo_set_power first."
     )
     assert receiver["MVL"] == "50"  # unchanged
 
@@ -275,7 +276,8 @@ async def test_zone2_on_net_at_capped_volume(client, receiver):
     assert text(await client.call_tool("onkyo_set_power", {"state": "on", "zone": "zone2"})).startswith(
         "Zone 2: Power is now on."
     )
-    assert text(await client.call_tool("onkyo_set_input", {"source": "net", "zone": "zone2"})) == "Zone 2: Input is now net"
+    res = await client.call_tool("onkyo_set_input", {"source": "net", "zone": "zone2"})
+    assert text(res) == "Zone 2: Input is now net"
     result = await client.call_tool("onkyo_set_volume", {"level": 90, "zone": "zone2"})
     assert text(result) == "Zone 2: Volume is now 75.0. Requested 90, capped at 75 (the owner's limit for this zone)."
     assert text(await client.call_tool("onkyo_set_mute", {"muted": True, "zone": "zone2"})) == "Zone 2: Muted"
@@ -430,7 +432,8 @@ async def test_control_playback(client, receiver):
     assert text(await client.call_tool("onkyo_control_playback", {"action": "pause"})) == "Paused"
     assert receiver["NST"].startswith("p")
     assert text(await client.call_tool("onkyo_control_playback", {"action": "play"})) == "Playing"
-    assert text(await client.call_tool("onkyo_control_playback", {"action": "next"})) == "Now playing Interstate Love Song"
+    nxt = await client.call_tool("onkyo_control_playback", {"action": "next"})
+    assert text(nxt) == "Now playing Interstate Love Song"
 
 
 async def test_previous_refused_says_so(client, receiver):
@@ -501,12 +504,14 @@ async def test_signed_out_service_says_so(client, receiver):
 async def test_browse_folders(client, receiver):
     top = json.loads(text(await client.call_tool("onkyo_list_stations", {"service": "tunein"})))
     assert (top["playable"], top["folders"]) == ([], ["My Presets", "Local Radio"])
-    presets = json.loads(text(await client.call_tool("onkyo_list_stations", {"service": "tunein", "folder": ["presets"]})))
+    args = {"service": "tunein", "folder": ["presets"]}
+    presets = json.loads(text(await client.call_tool("onkyo_list_stations", args)))
     assert presets["playable"] == ["KQED Public Radio", "KCSM Jazz"]
 
 
 async def test_play_from_folder(client, receiver, fake):
-    result = await client.call_tool("onkyo_play_station", {"station": "jazz", "service": "tunein", "folder": ["My Presets"]})
+    call_args = {"station": "jazz", "service": "tunein", "folder": ["My Presets"]}
+    result = await client.call_tool("onkyo_play_station", call_args)
     assert text(result).startswith("Playing KCSM Jazz on tunein")
     assert fake.selected == [2]  # position inside the folder
 
@@ -530,7 +535,8 @@ async def test_empty_folder_passes_on_receiver_message(client, receiver):
 
 async def test_long_lists_are_read_in_pages(client, receiver):
     # 250 albums: three NLA pages (100 + 100 + 50), positions counted across pages
-    albums = json.loads(text(await client.call_tool("onkyo_list_stations", {"service": "music-server", "folder": ["Album"]})))
+    srv_args = {"service": "music-server", "folder": ["Album"]}
+    albums = json.loads(text(await client.call_tool("onkyo_list_stations", srv_args)))
     assert len(albums["folders"]) == 250 and albums["folders"][-1] == "Album 250"
     result = await client.call_tool(
         "onkyo_play_station", {"station": "Track 237", "service": "music-server", "folder": ["Album", "Album 237"]}

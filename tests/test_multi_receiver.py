@@ -51,7 +51,8 @@ async def test_pick_by_name_ignoring_case_and_spaces(two, fake, fake2):
 
 
 async def test_pick_by_address(two, fake2):
-    assert only(await two.call_tool("onkyo_get_status", {"receiver": f"127.0.0.1:{fake2.port}"}))["receiver"] == "Theater"
+    status = await two.call_tool("onkyo_get_status", {"receiver": f"127.0.0.1:{fake2.port}"})
+    assert only(status)["receiver"] == "Theater"
 
 
 async def test_status_without_receiver_covers_them_all(two, fake2):

@@ -100,7 +100,7 @@ def test_call_and_simulate_end_to_end(tmp_path):
                 break
             time.sleep(0.05)
         out = subprocess.run(
-            [exe, "call", "set_volume", "level=30", "receiver=theater"],
+            [exe, "call", "onkyo_set_volume", "level=30", "receiver=theater"],
             env=env,
             capture_output=True,
             text=True,
@@ -109,11 +109,11 @@ def test_call_and_simulate_end_to_end(tmp_path):
         assert out.returncode == 0, out.stderr
         assert json.loads(out.stdout)["sent"] == ["MVL3C"]
         refused = subprocess.run(
-            [exe, "call", "set_volume", "level=30"], env=env, capture_output=True, text=True, timeout=30
+            [exe, "call", "onkyo_set_volume", "level=30"], env=env, capture_output=True, text=True, timeout=30
         )
         assert refused.returncode == 1 and "Several receivers are configured" in refused.stderr
         listed = subprocess.run([exe, "call", "tools"], env=env, capture_output=True, text=True, timeout=30)
-        assert "get_status" in listed.stdout
+        assert "onkyo_get_status" in listed.stdout
     finally:
         sim.send_signal(signal.SIGINT)
         sim.wait(timeout=10)

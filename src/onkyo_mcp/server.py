@@ -34,7 +34,6 @@ from typing import Annotated, Any, Literal
 from xml.etree import ElementTree
 
 from mcp.server.mcpserver import MCPServer
-from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -61,7 +60,7 @@ from .logsafe import RedactingFormatter
 from .lookup import unknown_with_suggestions
 from .ratelimit import TokenBucket, refusal
 from .receivers import Receiver, ReceiverError, Registry, Session, Unreachable
-from .tools import ACT, ACT_IDEMPOTENT, DESTRUCTIVE, OPEN_WORLD_READ, READ_ONLY
+from .tools import ACT, ACT_IDEMPOTENT, OPEN_WORLD_READ, READ_ONLY
 
 # Everything goes through this logger (and its children), which writes to
 # stderr: on the stdio transport, stdout belongs to JSON-RPC. Silent
@@ -111,12 +110,15 @@ mcp = MCPServer(
     "onkyo",
     instructions=(
         "Controls Onkyo/Integra AV receivers on the local network. "
-        "In the home theater signal chain, the Onkyo AV Receiver acts as the Audio Switcher and Master Volume Owner: "
-        "media sources (such as NVIDIA Shield TV) feed into AVR HDMI inputs (e.g. 'strm-box'), and the AVR routes video "
-        "out to the display (LG webOS TV) while powering speakers directly. Always adjust volume here via onkyo_set_volume "
-        "rather than on the display. Call onkyo_get_status first: it shows each receiver's zones (main, zone2, zone3) "
-        "with power, volume, mute, and input. Pass `receiver` when multiple units are present, and `zone` for secondary rooms. "
-        "Each receiver features one hardware network streaming player, shared by every zone whose input is 'net'."
+        "In the home theater signal chain, the Onkyo AV Receiver acts as the "
+        "Audio Switcher and Master Volume Owner: media sources (such as NVIDIA Shield TV) "
+        "feed into AVR HDMI inputs (e.g. 'strm-box'), and the AVR routes video out to the "
+        "display (LG webOS TV) while powering speakers directly. Always adjust volume here via "
+        "onkyo_set_volume rather than on the display. Call onkyo_get_status first: it shows each "
+        "receiver's zones (main, zone2, zone3) with power, volume, mute, and input. Pass "
+        "`receiver` when multiple units are present, and `zone` for secondary rooms. "
+        "Each receiver features one hardware network streaming player, shared by every "
+        "zone whose input is 'net'."
     ),
     lifespan=lifespan,
 )
@@ -326,7 +328,8 @@ class FoundReceiver(TypedDict):
 async def onkyo_discover_receivers() -> list[FoundReceiver]:
     """
     <use_case>
-    Find Onkyo, Integra, and Pioneer AV receivers on the local network. Returns each receiver's IP address, model, eISCP port, and MAC address.
+    Find Onkyo, Integra, and Pioneer AV receivers on the local network.
+    Returns each receiver's IP address, model, eISCP port, and MAC address.
     </use_case>
     <important_notes>
     - Broadcasts UDP packets to the LAN subnet; not needed when receivers are explicitly configured.
@@ -667,7 +670,8 @@ async def onkyo_set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zon
     Set the volume level for a specific AV receiver zone.
     </use_case>
     <important_notes>
-    - Onkyo is the master audio owner in the signal chain; use this tool rather than TV volume when external speakers/AVR are used.
+    - Onkyo is the master audio owner in the signal chain; use this tool rather than TV
+      volume when external speakers/AVR are used.
     - Accepts 0-100 on the front-panel scale (supports 0.5 increments on newer receivers).
     - Levels exceeding the configured zone safety cap are automatically clamped.
     - Zones feeding fixed-level amplifiers will reject volume adjustments.
@@ -1393,9 +1397,15 @@ def onkyo_play_music(room: str, service: str = "", station: str = "", volume: st
         + (
             f"5. Call onkyo_list_stations, then onkyo_play_station with the closest match to {station!r}.\n"
             if station
-            else "5. If the service has stations, call onkyo_list_stations and onkyo_play_station with the one I want.\n"
+            else (
+                "5. If the service has stations, call onkyo_list_stations and onkyo_play_station with the one I want.\n"
+            )
         )
-        + (f"6. Call onkyo_set_volume with level={volume} for that zone.\n" if volume else "6. Leave the volume alone.\n")
+        + (
+            f"6. Call onkyo_set_volume with level={volume} for that zone.\n"
+            if volume
+            else "6. Leave the volume alone.\n"
+        )
         + "7. Tell me what's playing (onkyo_get_now_playing), and repeat any warning the tools gave: a receiver has "
         'one network player, so every zone on "net" hears the same thing.'
     )
