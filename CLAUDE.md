@@ -60,6 +60,13 @@ changes over clever ones. Show the JSON-RPC traffic when it helps.
 - Real hardware: `mcp-server-onkyo doctor --host <ip>`, then HARDWARE_VALIDATION.md.
 - Keep README.md's tool, config and verification tables and the roadmap in sync with the code.
 
+## Releases
+
+Version lives only in `src/onkyo_mcp/__init__.py` (`pyproject.toml` reads it). Bump it and add a
+CHANGELOG.md section for every release: pip treats a same-version install as already satisfied. Pushing
+tag `vX.Y.Z` runs `.github/workflows/release.yml` (PyPI trusted publishing, then a GitHub release).
+CONTRIBUTING.md has the steps and the one-time PyPI setup.
+
 ## eISCP reference
 Command tables: https://github.com/miracle2k/onkyo-eiscp (eiscp-commands.yaml).
 Target hardware: TX-NR7100 and TX-NR6050 (2021+). Volume (MVL) is hex in
