@@ -18,7 +18,7 @@ It's one of four sibling servers with the same conventions (multi-device by name
 > (several receivers by name, per-zone caps, resources and prompts, dry run, `doctor`, HTTP,
 > the Alpine service) are **verified against the simulator only**. [Verification
 > status](#verification-status) lists every protocol assumption and whether hardware has
-> confirmed it; [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) is the checklist that will.
+> confirmed it; [HARDWARE_VALIDATION.md](https://github.com/SDNick484/mcp-server-onkyo/blob/main/HARDWARE_VALIDATION.md) is the checklist that will.
 > This is also a learning project for MCP, so the code is commented for that.
 
 ## Tools
@@ -152,7 +152,16 @@ input, let it: the Onkyo calls then only confirm and adjust.
 ## Install
 
 ```sh
-pip install git+https://github.com/SDNick484/mcp-server-onkyo
+python -m venv ~/.venvs/onkyo && . ~/.venvs/onkyo/bin/activate
+pip install mcp-server-onkyo
+```
+
+From source instead (for the newest code, or to run the tests):
+
+```sh
+git clone https://github.com/SDNick484/mcp-server-onkyo.git && cd mcp-server-onkyo
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]" && pytest
 ```
 
 Python 3.11+. Dependencies: the official `mcp` SDK, `pyjwt[crypto]` and `uvicorn` (only used by
@@ -178,7 +187,7 @@ Receiver 192.168.1.147: TX-NR6050
 ```
 
 `doctor` checks each layer in turn (TCP, eISCP framing, self-description, each zone) and stops at
-the first failure with what it means and which [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md)
+the first failure with what it means and which [HARDWARE_VALIDATION.md](https://github.com/SDNick484/mcp-server-onkyo/blob/main/HARDWARE_VALIDATION.md)
 step covers it. It only sends queries. `--json` for a machine-readable report, `--dump DIR` to
 save each receiver's raw replies (redacted) for an issue or to compare with the simulator.
 
@@ -443,7 +452,7 @@ implements it and nothing has confirmed it.
 
 `O-MULTI-COMMAND` is the one the restructure depends on most: tool calls used to open one
 connection per command, and now share one. `doctor` exercises it first
-([step 2](HARDWARE_VALIDATION.md#2-connect-tcp-and-eiscp-one-receiver-at-a-time-then-both-by-name)).
+([step 2](https://github.com/SDNick484/mcp-server-onkyo/blob/main/HARDWARE_VALIDATION.md#2-connect-tcp-and-eiscp-one-receiver-at-a-time-then-both-by-name)).
 `test_assumptions.py` fails if this table and `assumptions.py` disagree.
 
 ## Roadmap
@@ -451,7 +460,7 @@ connection per command, and now share one. `doctor` exercises it first
 - [x] Zone 2 / Zone 3, inputs, listening modes, network services, stations, folders
 - [x] Several receivers by name; typed results; resources and prompts
 - [x] Streamable HTTP behind Cloudflare Access; OpenRC service on Alpine
-- [ ] Hardware validation of the above ([HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md))
+- [ ] Hardware validation of the above ([HARDWARE_VALIDATION.md](https://github.com/SDNick484/mcp-server-onkyo/blob/main/HARDWARE_VALIDATION.md))
 - [ ] A persistent connection per receiver, with pushes as MCP resource updates (once the Claude
       apps support subscriptions)
 - [ ] Publish to PyPI and the MCP registry
@@ -463,4 +472,4 @@ corrections from the receivers themselves (their NRI lists TIDAL as `1B` and Air
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/SDNick484/mcp-server-onkyo/blob/main/LICENSE)
