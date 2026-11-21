@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Every tool has an authorization tier (`read`, `power-off`, `everyday` or `costly`). `set_power` is `power-off` for `state="off"` and `everyday` for `on`. None is costly; no tool asks for confirmation (a costly tool would ask the person to confirm, and refuse where the app can't show the prompt).
+- `MCP_ALLOWED_SERVICE_TOKENS` and `MCP_AUTOMATION_TIERS` settings.
+
+### Changed
+
+- A Cloudflare Access service token now gets 403 unless its client ID is in `MCP_ALLOWED_SERVICE_TOKENS`, and automated callers get only `MCP_AUTOMATION_TIERS` (default `read,power-off`). Deployments that use a service token must set the variable.
+- Synced `remote.py` and `ratelimit.py` (and their tests) to mcp-server-shared `f4719e3`.
+
 ## [0.2.0]
 
 First release on PyPI.

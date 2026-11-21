@@ -60,6 +60,7 @@ from .logsafe import RedactingFormatter
 from .lookup import unknown_with_suggestions
 from .ratelimit import TokenBucket, refusal
 from .receivers import Receiver, ReceiverError, Registry, Session, Unreachable
+from .remote import request_state_security, tier
 from .tools import ACT, ACT_IDEMPOTENT, OPEN_WORLD_READ, READ_ONLY
 
 # Everything goes through this logger (and its children), which writes to
@@ -121,6 +122,7 @@ mcp = MCPServer(
         "zone whose input is 'net'."
     ),
     lifespan=lifespan,
+    request_state_security=request_state_security(),
 )
 
 
@@ -325,6 +327,7 @@ class FoundReceiver(TypedDict):
 
 
 @mcp.tool(title="Discover receivers", annotations=OPEN_WORLD_READ)
+@tier("read")
 async def onkyo_discover_receivers() -> list[FoundReceiver]:
     """
     <use_case>
@@ -504,6 +507,7 @@ def shared_player_note(on_net: list[Zone]) -> str:
 
 
 @mcp.tool(title="Get receiver status", annotations=READ_ONLY)
+@tier("read")
 async def onkyo_get_status(receiver: ReceiverArg = None, zone: ZoneFilter = None) -> Status:
     """
     <use_case>
@@ -627,6 +631,7 @@ def dry_run(c: Call, zone: Zone | None, would: str, commands: list[str]) -> Acti
 
 
 @mcp.tool(title="Set power", annotations=ACT_IDEMPOTENT)
+@tier(lambda args: "power-off" if args["state"] == "off" else "everyday")
 async def onkyo_set_power(state: PowerState, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
     """
     <use_case>
@@ -664,6 +669,7 @@ async def onkyo_set_power(state: PowerState, receiver: ReceiverArg = None, zone:
 
 
 @mcp.tool(title="Set volume", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def onkyo_set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
     """
     <use_case>
@@ -697,6 +703,7 @@ async def onkyo_set_volume(level: VolumeLevel, receiver: ReceiverArg = None, zon
 
 
 @mcp.tool(title="Set mute", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def onkyo_set_mute(muted: bool, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
     """
     <use_case>
@@ -720,6 +727,7 @@ async def onkyo_set_mute(muted: bool, receiver: ReceiverArg = None, zone: ZoneAr
 
 
 @mcp.tool(title="Select input", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def onkyo_set_input(source: Source, receiver: ReceiverArg = None, zone: ZoneArg = "main") -> ActionResult:
     """
     <use_case>
@@ -759,6 +767,7 @@ async def onkyo_set_input(source: Source, receiver: ReceiverArg = None, zone: Zo
 
 
 @mcp.tool(title="Set listening mode", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def onkyo_set_listening_mode(mode: ListeningMode, receiver: ReceiverArg = None) -> ActionResult:
     """
     <use_case>
@@ -795,6 +804,7 @@ async def onkyo_set_listening_mode(mode: ListeningMode, receiver: ReceiverArg = 
 
 
 @mcp.tool(title="Select network service", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def onkyo_select_net_service(service: NetService, receiver: ReceiverArg = None) -> ActionResult:
     """
     <use_case>
@@ -840,6 +850,7 @@ class NetServices(TypedDict):
 
 
 @mcp.tool(title="List network services", annotations=READ_ONLY)
+@tier("read")
 async def onkyo_list_net_services(receiver: ReceiverArg = None) -> NetServices:
     """
     <use_case>
@@ -894,6 +905,7 @@ class NowPlaying(TypedDict):
 
 
 @mcp.tool(title="Get now playing", annotations=READ_ONLY)
+@tier("read")
 async def onkyo_get_now_playing(receiver: ReceiverArg = None) -> NowPlaying:
     """
     <use_case>
@@ -1085,6 +1097,7 @@ class StationList(TypedDict):
 
 
 @mcp.tool(title="List stations", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def onkyo_list_stations(
     service: NetService = "pandora",
     folder: FolderPath = (),
@@ -1147,6 +1160,7 @@ async def onkyo_list_stations(
 
 
 @mcp.tool(title="Play station", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def onkyo_play_station(
     station: str, service: NetService = "pandora", folder: FolderPath = (), receiver: ReceiverArg = None
 ) -> ActionResult:
@@ -1199,6 +1213,7 @@ PLAYBACK_CODES: dict[str, tuple[str, str | None]] = {
 
 
 @mcp.tool(title="Control playback", annotations=ACT)
+@tier("everyday")
 async def onkyo_control_playback(action: PlaybackAction, receiver: ReceiverArg = None) -> ActionResult:
     """
     <use_case>

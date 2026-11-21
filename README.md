@@ -64,6 +64,12 @@ idempotent ("next" twice skips two tracks). `discover_receivers` is the one open
 it lists whatever answers a broadcast. `list_stations` is marked as a setter, not read-only:
 browsing moves the receiver's on-screen menu.
 
+**Authorization tiers.** Every tool has a tier: `read` (the four read-only tools), `power-off`,
+`everyday` (the other setters), or `costly` (a chore to undo, so it asks the person to confirm first).
+`set_power` is `power-off` when `state` is `off` and `everyday` otherwise. **None is costly; no tool asks
+for confirmation.** Who may use which tier, and the two settings below, are in
+[HTTP and Cloudflare Access](#http-and-cloudflare-access).
+
 ### Zones
 
 The server asks each receiver which zones it has (`NRIQSTN`, once, then cached), so a missing
@@ -259,10 +265,17 @@ CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com CF_ACCESS_AUD=<aud tag> \
 | `--public-host` | `MCP_PUBLIC_HOSTS` | none: only loopback Host headers pass |
 | | `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | none: no Access checks |
 | | `MCP_ALLOWED_EMAILS` | anyone Access lets in |
+| | `MCP_ALLOWED_SERVICE_TOKENS` | none: no Access service token gets in |
+| | `MCP_AUTOMATION_TIERS` | `read,power-off`: what an admitted service token may call |
 
 With Access configured, every request needs a valid `Cf-Access-Jwt-Assertion`: signature (the
 team's published keys), audience, issuer, expiry, and the email allow-list if set. Anything else
-gets a plain 403. The server **refuses to start** on a non-loopback address without Access,
+gets a plain 403. A Cloudflare Access service token (an automated caller, not a person) is refused with
+a 403 unless its client ID (e.g. `token-1.access`) is in `MCP_ALLOWED_SERVICE_TOKENS`, and then may call
+only the tiers in `MCP_AUTOMATION_TIERS` (default `read,power-off`; it may add `everyday`, never
+`costly`): a "make sure it's off" job can put a zone in standby but not turn it on. People may call every
+tier. A `costly` tool would first ask the person to confirm and refuse where the app can't show the
+prompt; none here is costly. The server **refuses to start** on a non-loopback address without Access,
 unless `--insecure-no-auth` (trusted LAN testing only). `Host` and `Origin` are checked too
 (DNS-rebinding protection), including on `--bind 0.0.0.0`. `GET /healthz` answers without auth,
 for monitoring. Details are in `src/onkyo_mcp/remote.py`, which is identical in all four servers.
