@@ -302,7 +302,8 @@ su -s /bin/sh mcp-onkyo -c 'ONKYO_CONFIG_DIR=/etc/mcp-server-onkyo /opt/mcp-serv
 ```
 
 Expected: `install.sh` finishes without compiling anything (every dependency has a musl wheel),
-`healthz` answers `{"status": "ok"}`, `ps -o user,args | grep onkyo` shows `mcp-onkyo`, and `doctor` passes as
+`healthz` answers `{"status": "ok", "commit": ..., "repo": ...}` (the commit `install.sh` stamped in
+`/opt/mcp-server-onkyo/COMMIT`), `ps -o user,args | grep onkyo` shows `mcp-onkyo`, and `doctor` passes as
 in step 2. Then step 1 from here.
 
 With cloudflared and an Access application (see README: HTTP and Cloudflare Access), set
@@ -310,6 +311,7 @@ With cloudflared and an Access application (see README: HTTP and Cloudflare Acce
 restart, and check:
 
 ```sh
+curl -s https://<public host>/onkyo/mcp/healthz           # expect: the same JSON as healthz above
 curl -si https://<public host>/onkyo/mcp | head -1       # expect: a redirect to Access sign-in, or 403
 curl -si -H 'Host: <public host>' http://127.0.0.1:8711/onkyo/mcp | head -1   # expect: 403 (no JWT)
 ```

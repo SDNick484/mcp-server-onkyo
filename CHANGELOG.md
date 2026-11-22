@@ -4,6 +4,7 @@
 
 ### Added
 
+- `GET /onkyo/mcp/healthz`, the health check under the MCP path (the only one a tunnel routing `/onkyo/mcp` reaches), and both health routes report the installed `commit` and `repo` from `/opt/mcp-server-onkyo/COMMIT`, which `deploy/alpine/install.sh` now writes (pinning the default source to `main`'s current commit first). `remote.py` and the new `deploy/alpine/commit.sh` synced from mcp-server-shared a48209b; the install needs `git`.
 - Every tool has an authorization tier (`read`, `power-off`, `everyday` or `costly`). `set_power` is `power-off` for `state="off"` and `everyday` for `on`. None is costly; no tool asks for confirmation (a costly tool would ask the person to confirm, and refuse where the app can't show the prompt).
 - `MCP_ALLOWED_SERVICE_TOKENS` and `MCP_AUTOMATION_TIERS` settings.
 
