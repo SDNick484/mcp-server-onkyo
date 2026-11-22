@@ -277,8 +277,10 @@ only the tiers in `MCP_AUTOMATION_TIERS` (default `read,power-off`; it may add `
 tier. A `costly` tool would first ask the person to confirm and refuse where the app can't show the
 prompt; none here is costly. The server **refuses to start** on a non-loopback address without Access,
 unless `--insecure-no-auth` (trusted LAN testing only). `Host` and `Origin` are checked too
-(DNS-rebinding protection), including on `--bind 0.0.0.0`. `GET /healthz` answers without auth,
-for monitoring. Details are in `src/onkyo_mcp/remote.py`, which is identical in all four servers.
+(DNS-rebinding protection), including on `--bind 0.0.0.0`. `GET /healthz` and `GET /onkyo/mcp/healthz`
+(the one a tunnel that routes only `/onkyo/mcp` reaches) answer without auth, for monitoring, with the
+commit the install script stamped (`"commit"`, `"repo"`; from `/opt/mcp-server-onkyo/COMMIT`). Details
+are in `src/onkyo_mcp/remote.py`, which is identical in all four servers.
 
 ### As a service on Alpine (Proxmox LXC)
 
