@@ -61,7 +61,7 @@ from .lookup import unknown_with_suggestions
 from .ratelimit import TokenBucket, refusal
 from .receivers import Receiver, ReceiverError, Registry, Session, Unreachable
 from .remote import request_state_security, tier
-from .tools import ACT, ACT_IDEMPOTENT, OPEN_WORLD_READ, READ_ONLY
+from .tools import ACT, ACT_IDEMPOTENT, OPEN_WORLD_READ, READ_ONLY, trim_tools
 
 # Everything goes through this logger (and its children), which writes to
 # stderr: on the stdio transport, stdout belongs to JSON-RPC. Silent
@@ -1248,6 +1248,10 @@ async def onkyo_control_playback(action: PlaybackAction, receiver: ReceiverArg =
         "The track didn't change. The service may not allow that "
         "right now (Pandora limits skips per hour and can't go back)."
     )
+
+
+# Every tool is registered by now: shorten what tools/list sends (see tools.py).
+trim_tools(mcp)
 
 
 # ---------------------------------------------------------------------------
