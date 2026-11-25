@@ -260,8 +260,8 @@ async def test_zone_arguments_in_schema(client):
         assert set(zone["enum"]) == {"main", "zone2", "zone3"}, name
         assert zone["default"] == "main", name
     # onkyo_get_status's zone is a filter: omitted means every zone
-    status_zone = tools["onkyo_get_status"].input_schema["properties"]["zone"]
-    assert status_zone["default"] is None
+    status = tools["onkyo_get_status"].input_schema
+    assert "default" not in status["properties"]["zone"] and "zone" not in status.get("required", [])
     assert "zone" not in tools["onkyo_set_listening_mode"].input_schema["properties"]
 
 
